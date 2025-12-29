@@ -52,26 +52,10 @@ def products_keyboard(products):
     return InlineKeyboardMarkup(keyboard)
 
 def confirm_buy_keyboard(product_id, stock=1, max_can_buy=1):
-    """Keyboard chọn số lượng và xác nhận mua"""
-    keyboard = []
-    
-    # Nút chọn số lượng phổ biến
-    qty_buttons = []
-    quantities = [1, 2, 5, 10, 20, 50]
-    for qty in quantities:
-        if qty <= max_can_buy:
-            qty_buttons.append(InlineKeyboardButton(f"{qty}x", callback_data=f"confirm_buy_{product_id}_{qty}"))
-        if len(qty_buttons) == 3:
-            keyboard.append(qty_buttons)
-            qty_buttons = []
-    if qty_buttons:
-        keyboard.append(qty_buttons)
-    
-    # Nút mua tất cả nếu có nhiều
-    if max_can_buy > 1:
-        keyboard.append([InlineKeyboardButton(f"🛒 Mua tất cả ({max_can_buy}x)", callback_data=f"confirm_buy_{product_id}_{max_can_buy}")])
-    
-    keyboard.append([InlineKeyboardButton("❌ Hủy", callback_data="shop")])
+    """Keyboard xác nhận mua - user sẽ nhập số lượng"""
+    keyboard = [
+        [InlineKeyboardButton("❌ Hủy", callback_data="shop")],
+    ]
     return InlineKeyboardMarkup(keyboard)
 
 def deposit_amounts_keyboard():

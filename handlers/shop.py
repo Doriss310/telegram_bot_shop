@@ -72,6 +72,92 @@ async def handle_shop_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "🛒 DANH MỤC SẢN PHẨM\n\n👉 Chọn sản phẩm bên dưới:"
     await update.message.reply_text(text, reply_markup=products_keyboard(products))
 
+async def handle_buy_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xử lý khi user nhập số lượng muốn mua"""
+    product_id = context.user_data.get('buying_product_id')
+    max_can_buy = context.user_data.get('buying_max', 0)
+    
+    if not product_id:
+        return  # Không trong trạng thái mua hàng
+    
+    try:
+        quantity = int(update.message.text.strip())
+    except ValueError:
+        await update.message.reply_text("❌ Vui lòng nhập số lượng hợp lệ!")
+        return
+    
+    if quantity < 1:
+        await update.message.reply_text("❌ Số lượng phải >= 1!")
+        return
+    
+    if quantity > max_can_buy:
+        await update.message.reply_text(f"❌ Bạn chỉ có thể mua tối đa {max_can_buy} sản phẩm!")
+        return
+    
+    # Xử lý mua hàng
+    product = await get_product(product_id)
+    user_id = update.effective_user.id
+    
+    if not product:
+        await update.message.reply_text("❌ Sản phẩm không tồn tại!")
+        context.user_data.pop('buying_product_id', None)
+        return
+    
+    if product['stock'] < quantity:
+        await update.message.reply_text(f"❌ Không đủ hàng! Chỉ còn {product['stock']} sản phẩm.")
+        return
+    
+    total_price = product['price'] * quantity
+    balance = await get_balance(user_id)
+    
+    if balance < total_price:
+        await update.message.reply_text(
+            f"❌ Số dư không đủ!\n\n💰 Số dư: {balance:,}đ\n💵 Cần: {total_price:,}đ"
+        )
+        return
+    
+    # Mua nhiều sản phẩm
+    purchased_items = []
+    for _ in range(quantity):
+        stock = await get_available_stock(product_id)
+        if not stock:
+            break
+        await mark_stock_sold(stock[0])
+        await create_order(user_id, product_id, stock[1], product['price'])
+        purchased_items.append(stock[1])
+    
+    if not purchased_items:
+        await update.message.reply_text("❌ Sản phẩm đã hết hàng!")
+        context.user_data.pop('buying_product_id', None)
+        return
+    
+    # Trừ tiền
+    actual_total = product['price'] * len(purchased_items)
+    await update_balance(user_id, -actual_total)
+    new_balance = await get_balance(user_id)
+    
+    # Format danh sách sản phẩm
+    items_text = "\n".join([f"<code>{item}</code>" for item in purchased_items])
+    
+    text = f"""
+✅ MUA HÀNG THÀNH CÔNG!
+
+📦 Sản phẩm: {product['name']}
+🔢 Số lượng: {len(purchased_items)}
+💰 Tổng tiền: {actual_total:,}đ
+💳 Số dư còn lại: {new_balance:,}đ
+
+📋 Thông tin sản phẩm:
+{items_text}
+
+⚠️ Lưu ý: Hãy lưu lại thông tin trên!
+"""
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=user_reply_keyboard())
+    
+    # Clear trạng thái mua
+    context.user_data.pop('buying_product_id', None)
+    context.user_data.pop('buying_max', None)
+
 async def handle_deposit_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['waiting_deposit'] = True
     text = """
@@ -342,15 +428,20 @@ async def show_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_balance = await get_balance(query.from_user.id)
     max_can_buy = min(product['stock'], user_balance // product['price']) if product['price'] > 0 else product['stock']
     
+    # Lưu thông tin sản phẩm để xử lý khi user nhập số lượng
+    context.user_data['buying_product_id'] = product_id
+    context.user_data['buying_max'] = max_can_buy
+    
     text = f"""
 📦 {product['name']}
 
 💰 Giá: {product['price']:,}đ
 📊 Còn lại: {product['stock']} sản phẩm
-📝 Mô tả: {product['description'] or 'Không có mô tả'}
 
 💳 Số dư của bạn: {user_balance:,}đ
 🛒 Có thể mua tối đa: {max_can_buy} sản phẩm
+
+📝 Nhập số lượng muốn mua (1-{max_can_buy}):
 """
     await query.edit_message_text(text, reply_markup=confirm_buy_keyboard(product_id, product['stock'], max_can_buy))
 

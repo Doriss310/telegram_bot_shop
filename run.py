@@ -14,6 +14,7 @@ from handlers.shop import (
     show_history, show_deposit, process_deposit, handle_deposit_text,
     handle_shop_text, handle_withdraw_text, process_deposit_amount,
     process_withdraw_amount, process_withdraw_bank, process_withdraw_account,
+    handle_buy_quantity,
     WAITING_DEPOSIT_AMOUNT, WAITING_WITHDRAW_AMOUNT, WAITING_WITHDRAW_BANK, WAITING_WITHDRAW_ACCOUNT
 )
 from handlers.admin import (
@@ -142,6 +143,9 @@ def setup_bot():
     app.add_handler(MessageHandler(filters.Regex("^💰 Số dư$"), handle_balance))
     app.add_handler(MessageHandler(filters.Regex("^🛒 Danh mục$"), handle_shop_text))
     
+    # Handler nhập số lượng mua (chỉ số)
+    app.add_handler(MessageHandler(filters.Regex("^\\d+$"), handle_buy_quantity))
+    
     # Admin reply keyboard handlers
     app.add_handler(MessageHandler(filters.Regex("^📦 Quản lý SP$"), handle_admin_products_text))
     app.add_handler(MessageHandler(filters.Regex("^📥 Thêm stock$"), handle_admin_stock_text))
@@ -153,7 +157,6 @@ def setup_bot():
     app.add_handler(CallbackQueryHandler(back_to_main, pattern="^back_main$"))
     app.add_handler(CallbackQueryHandler(show_shop, pattern="^shop$"))
     app.add_handler(CallbackQueryHandler(show_product, pattern="^buy_\\d+$"))
-    app.add_handler(CallbackQueryHandler(confirm_buy, pattern="^confirm_buy_\\d+$"))
     app.add_handler(CallbackQueryHandler(show_account, pattern="^account$"))
     app.add_handler(CallbackQueryHandler(show_history, pattern="^history$"))
     app.add_handler(CallbackQueryHandler(show_deposit, pattern="^deposit$"))
