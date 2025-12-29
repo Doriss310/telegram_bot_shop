@@ -340,6 +340,7 @@ async def show_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     user_balance = await get_balance(query.from_user.id)
+    max_can_buy = min(product['stock'], user_balance // product['price']) if product['price'] > 0 else product['stock']
     
     text = f"""
 📦 {product['name']}
@@ -349,14 +350,19 @@ async def show_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📝 Mô tả: {product['description'] or 'Không có mô tả'}
 
 💳 Số dư của bạn: {user_balance:,}đ
+🛒 Có thể mua tối đa: {max_can_buy} sản phẩm
 """
-    await query.edit_message_text(text, reply_markup=confirm_buy_keyboard(product_id))
+    await query.edit_message_text(text, reply_markup=confirm_buy_keyboard(product_id, product['stock'], max_can_buy))
 
 async def confirm_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    product_id = int(query.data.split("_")[2])
+    # Parse callback: confirm_buy_{product_id}_{quantity}
+    parts = query.data.split("_")
+    product_id = int(parts[2])
+    quantity = int(parts[3]) if len(parts) > 3 else 1
+    
     product = await get_product(product_id)
     user_id = query.from_user.id
     
@@ -364,40 +370,52 @@ async def confirm_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ Sản phẩm không tồn tại!", reply_markup=back_keyboard("shop"))
         return
     
-    if product['stock'] <= 0:
-        await query.edit_message_text("❌ Sản phẩm đã hết hàng!", reply_markup=back_keyboard("shop"))
+    if product['stock'] < quantity:
+        await query.edit_message_text(f"❌ Không đủ hàng! Chỉ còn {product['stock']} sản phẩm.", reply_markup=back_keyboard("shop"))
         return
     
+    total_price = product['price'] * quantity
     balance = await get_balance(user_id)
-    if balance < product['price']:
+    
+    if balance < total_price:
         await query.edit_message_text(
-            f"❌ Số dư không đủ!\n\n💰 Số dư: {balance:,}đ\n💵 Cần: {product['price']:,}đ\n\nVui lòng nạp thêm tiền.",
+            f"❌ Số dư không đủ!\n\n💰 Số dư: {balance:,}đ\n💵 Cần: {total_price:,}đ ({quantity}x {product['price']:,}đ)\n\nVui lòng nạp thêm tiền.",
             reply_markup=back_keyboard("deposit")
         )
         return
     
-    # Get stock
-    stock = await get_available_stock(product_id)
-    if not stock:
+    # Mua nhiều sản phẩm
+    purchased_items = []
+    for _ in range(quantity):
+        stock = await get_available_stock(product_id)
+        if not stock:
+            break
+        await mark_stock_sold(stock[0])
+        await create_order(user_id, product_id, stock[1], product['price'])
+        purchased_items.append(stock[1])
+    
+    if not purchased_items:
         await query.edit_message_text("❌ Sản phẩm đã hết hàng!", reply_markup=back_keyboard("shop"))
         return
     
-    # Process purchase
-    await update_balance(user_id, -product['price'])
-    await mark_stock_sold(stock[0])
-    await create_order(user_id, product_id, stock[1], product['price'])
-    
+    # Trừ tiền theo số lượng thực tế mua được
+    actual_total = product['price'] * len(purchased_items)
+    await update_balance(user_id, -actual_total)
     new_balance = await get_balance(user_id)
+    
+    # Format danh sách sản phẩm
+    items_text = "\n".join([f"<code>{item}</code>" for item in purchased_items])
     
     text = f"""
 ✅ MUA HÀNG THÀNH CÔNG!
 
 📦 Sản phẩm: {product['name']}
-💰 Giá: {product['price']:,}đ
+🔢 Số lượng: {len(purchased_items)}
+💰 Tổng tiền: {actual_total:,}đ
 💳 Số dư còn lại: {new_balance:,}đ
 
 📋 Thông tin sản phẩm:
-<code>{stock[1]}</code>
+{items_text}
 
 ⚠️ Lưu ý: Hãy lưu lại thông tin trên!
 """
