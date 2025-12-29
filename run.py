@@ -49,16 +49,7 @@ logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('telegram').setLevel(logging.WARNING)
 
 async def post_init(application):
-    os.makedirs("data", exist_ok=True)
-    logger.info("📁 Data directory ready")
-    
-    # Init main database
-    await init_db()
-    logger.info("✅ Main database initialized!")
-    
-    # Init checker database
-    await init_checker_db()
-    logger.info("✅ Checker database initialized!")
+    pass  # Database already initialized in main()
 
 def setup_bot():
     app = (
@@ -186,6 +177,14 @@ def setup_bot():
     return app
 
 async def main():
+    # Init database FIRST
+    os.makedirs("data", exist_ok=True)
+    logger.info("📁 Data directory ready")
+    await init_db()
+    logger.info("✅ Main database initialized!")
+    await init_checker_db()
+    logger.info("✅ Checker database initialized!")
+    
     bot_app = setup_bot()
     
     logger.info("🤖 Bot is starting...")
