@@ -28,9 +28,11 @@ from handlers.admin import (
     set_account_name_start, set_account_name_done,
     set_sepay_token_start, set_sepay_token_done,
     cancel_conversation, ADD_PRODUCT_NAME, ADD_PRODUCT_PRICE, ADD_STOCK_CONTENT,
-    BANK_NAME, ACCOUNT_NUMBER, ACCOUNT_NAME, SEPAY_TOKEN, NOTIFICATION_MESSAGE,
+    BANK_NAME, ACCOUNT_NUMBER, ACCOUNT_NAME, SEPAY_TOKEN, NOTIFICATION_MESSAGE, EDIT_STOCK_CONTENT,
     handle_admin_products_text, handle_admin_stock_text, handle_admin_withdrawals_text,
-    handle_admin_bank_text, handle_exit_admin, notification_command, notification_send
+    handle_admin_bank_text, handle_exit_admin, notification_command, notification_send,
+    admin_manage_stock, admin_view_stock, admin_stock_page, admin_stock_detail,
+    admin_edit_stock_start, admin_edit_stock_done, admin_delete_stock, handle_admin_manage_stock_text
 )
 from sepay_checker import run_checker, init_checker_db
 
@@ -78,6 +80,15 @@ def setup_bot():
         entry_points=[CallbackQueryHandler(admin_select_stock_product, pattern="^admin_stock_\\d+$")],
         states={
             ADD_STOCK_CONTENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_add_stock_content)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+    )
+    
+    # Edit stock conversation
+    edit_stock_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_edit_stock_start, pattern="^admin_editstock_\\d+$")],
+        states={
+            EDIT_STOCK_CONTENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_edit_stock_done)],
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
@@ -141,6 +152,7 @@ def setup_bot():
     # Conversations
     app.add_handler(add_product_conv)
     app.add_handler(add_stock_conv)
+    app.add_handler(edit_stock_conv)
     app.add_handler(deposit_conv)
     app.add_handler(withdraw_conv)
     app.add_handler(bank_name_conv)
@@ -148,7 +160,7 @@ def setup_bot():
     app.add_handler(account_name_conv)
     app.add_handler(sepay_token_conv)
     
-    # Reply keyboard handlers
+    # Reply keyboard handlers (user)
     app.add_handler(MessageHandler(filters.Regex("^📜 Lịch sử$"), handle_history_text))
     app.add_handler(MessageHandler(filters.Regex("^💰 Số dư$"), handle_balance))
     app.add_handler(MessageHandler(filters.Regex("^🛒 Danh mục$"), handle_shop_text))
@@ -159,9 +171,10 @@ def setup_bot():
     # Admin reply keyboard handlers
     app.add_handler(MessageHandler(filters.Regex("^📦 Quản lý SP$"), handle_admin_products_text))
     app.add_handler(MessageHandler(filters.Regex("^📥 Thêm stock$"), handle_admin_stock_text))
-    app.add_handler(MessageHandler(filters.Regex("^💳 Duyệt rút tiền$"), handle_admin_withdrawals_text))
+    app.add_handler(MessageHandler(filters.Regex("^📋 Xem stock$"), handle_admin_manage_stock_text))
+    app.add_handler(MessageHandler(filters.Regex("^💸 Duyệt rút tiền$"), handle_admin_withdrawals_text))
     app.add_handler(MessageHandler(filters.Regex("^🏦 Cài đặt NH$"), handle_admin_bank_text))
-    app.add_handler(MessageHandler(filters.Regex("^❌ Thoát Admin$"), handle_exit_admin))
+    app.add_handler(MessageHandler(filters.Regex("^🚪 Thoát Admin$"), handle_exit_admin))
     
     # User callbacks
     app.add_handler(CallbackQueryHandler(back_to_main, pattern="^back_main$"))
@@ -186,6 +199,13 @@ def setup_bot():
     app.add_handler(CallbackQueryHandler(admin_cancel_withdrawal, pattern="^admin_cancel_withdraw_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_bank_settings, pattern="^admin_bank_settings$"))
     app.add_handler(CallbackQueryHandler(refresh_bank_info, pattern="^refresh_bank_info$"))
+    
+    # Stock management callbacks
+    app.add_handler(CallbackQueryHandler(admin_manage_stock, pattern="^admin_manage_stock$"))
+    app.add_handler(CallbackQueryHandler(admin_view_stock, pattern="^admin_viewstock_\\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_stock_page, pattern="^admin_stockpage_\\d+_\\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_stock_detail, pattern="^admin_stockdetail_\\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_delete_stock, pattern="^admin_delstock_\\d+_\\d+$"))
     
     return app
 

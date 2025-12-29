@@ -168,6 +168,36 @@ async def mark_stock_sold(stock_id: int):
         await db.execute("UPDATE stock SET sold = 1 WHERE id = ?", (stock_id,))
         await db.commit()
 
+async def get_stock_by_product(product_id: int):
+    """Lấy tất cả stock của sản phẩm"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT id, content, sold FROM stock WHERE product_id = ? ORDER BY sold ASC, id DESC",
+            (product_id,)
+        )
+        return await cursor.fetchall()
+
+async def get_stock_detail(stock_id: int):
+    """Lấy chi tiết một stock"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT id, product_id, content, sold FROM stock WHERE id = ?",
+            (stock_id,)
+        )
+        return await cursor.fetchone()
+
+async def update_stock_content(stock_id: int, new_content: str):
+    """Cập nhật nội dung stock"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE stock SET content = ? WHERE id = ?", (new_content, stock_id))
+        await db.commit()
+
+async def delete_stock(stock_id: int):
+    """Xóa một stock"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM stock WHERE id = ?", (stock_id,))
+        await db.commit()
+
 # Order functions
 async def create_order(user_id: int, product_id: int, content: str, price: int):
     async with aiosqlite.connect(DB_PATH) as db:

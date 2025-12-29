@@ -4,12 +4,14 @@ from database import (
     get_products, add_product, delete_product, add_stock_bulk,
     get_pending_deposits, confirm_deposit, cancel_deposit, get_stats,
     get_pending_withdrawals, confirm_withdrawal, cancel_withdrawal,
-    get_bank_settings, set_setting, get_setting, get_all_user_ids
+    get_bank_settings, set_setting, get_setting, get_all_user_ids,
+    get_stock_by_product, get_stock_detail, update_stock_content, delete_stock, get_product
 )
 from keyboards import (
     admin_menu_keyboard, admin_products_keyboard, admin_stock_keyboard,
     pending_deposits_keyboard, pending_withdrawals_keyboard, back_keyboard, main_menu_keyboard,
-    admin_reply_keyboard, user_reply_keyboard
+    admin_reply_keyboard, user_reply_keyboard, admin_view_stock_keyboard,
+    admin_stock_list_keyboard, admin_stock_detail_keyboard
 )
 from config import ADMIN_IDS
 
@@ -18,6 +20,7 @@ ADD_PRODUCT_NAME, ADD_PRODUCT_PRICE = range(2)
 ADD_STOCK_CONTENT = 10
 BANK_NAME, ACCOUNT_NUMBER, ACCOUNT_NAME, SEPAY_TOKEN = range(20, 24)
 NOTIFICATION_MESSAGE = 30
+EDIT_STOCK_CONTENT = 31
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
@@ -413,6 +416,14 @@ async def handle_admin_stock_text(update: Update, context: ContextTypes.DEFAULT_
     text = "📥 THÊM STOCK\n\nChọn sản phẩm để thêm stock:"
     await update.message.reply_text(text, reply_markup=admin_stock_keyboard(products))
 
+async def handle_admin_manage_stock_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler cho nút text Quản lý stock"""
+    if not is_admin(update.effective_user.id):
+        return
+    products = await get_products()
+    text = "📋 QUẢN LÝ STOCK\n\nChọn sản phẩm để xem/sửa stock:"
+    await update.message.reply_text(text, reply_markup=admin_view_stock_keyboard(products))
+
 async def handle_admin_withdrawals_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -503,6 +514,146 @@ async def notification_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"❌ Thất bại: {failed} (user đã block bot)"
     )
     return ConversationHandler.END
+
+# Stock management
+async def admin_manage_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Menu quản lý stock - chọn sản phẩm để xem"""
+    query = update.callback_query
+    await query.answer()
+    
+    products = await get_products()
+    text = "📋 QUẢN LÝ STOCK\n\nChọn sản phẩm để xem/sửa stock:"
+    await query.edit_message_text(text, reply_markup=admin_view_stock_keyboard(products))
+
+async def admin_view_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xem danh sách stock của sản phẩm"""
+    query = update.callback_query
+    await query.answer()
+    
+    product_id = int(query.data.split("_")[2])
+    context.user_data['current_product_id'] = product_id
+    
+    product = await get_product(product_id)
+    stocks = await get_stock_by_product(product_id)
+    
+    if not stocks:
+        await query.edit_message_text(
+            f"📦 {product['name']}\n\n❌ Chưa có stock nào!",
+            reply_markup=back_keyboard("admin_manage_stock")
+        )
+        return
+    
+    total = len(stocks)
+    sold = sum(1 for s in stocks if s[2])
+    available = total - sold
+    
+    text = f"📦 {product['name']}\n\n📊 Tổng: {total} | 🟢 Còn: {available} | 🔴 Đã bán: {sold}\n\nChọn stock để xem chi tiết:"
+    await query.edit_message_text(text, reply_markup=admin_stock_list_keyboard(stocks, product_id))
+
+async def admin_stock_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Chuyển trang danh sách stock"""
+    query = update.callback_query
+    await query.answer()
+    
+    parts = query.data.split("_")
+    product_id = int(parts[2])
+    page = int(parts[3])
+    
+    product = await get_product(product_id)
+    stocks = await get_stock_by_product(product_id)
+    
+    total = len(stocks)
+    sold = sum(1 for s in stocks if s[2])
+    available = total - sold
+    
+    text = f"📦 {product['name']}\n\n📊 Tổng: {total} | 🟢 Còn: {available} | 🔴 Đã bán: {sold}\n\nChọn stock để xem chi tiết:"
+    await query.edit_message_text(text, reply_markup=admin_stock_list_keyboard(stocks, product_id, page))
+
+async def admin_stock_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xem chi tiết một stock"""
+    query = update.callback_query
+    await query.answer()
+    
+    stock_id = int(query.data.split("_")[2])
+    stock = await get_stock_detail(stock_id)
+    
+    if not stock:
+        await query.edit_message_text("❌ Stock không tồn tại!", reply_markup=back_keyboard("admin_manage_stock"))
+        return
+    
+    s_id, product_id, content, sold = stock
+    status = "🔴 Đã bán" if sold else "🟢 Chưa bán"
+    
+    text = f"📋 CHI TIẾT STOCK #{s_id}\n\n{status}\n\n📝 Nội dung:\n{content}"
+    await query.edit_message_text(text, reply_markup=admin_stock_detail_keyboard(s_id, product_id))
+
+async def admin_edit_stock_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Bắt đầu sửa stock"""
+    query = update.callback_query
+    await query.answer()
+    
+    stock_id = int(query.data.split("_")[2])
+    context.user_data['edit_stock_id'] = stock_id
+    
+    stock = await get_stock_detail(stock_id)
+    if stock:
+        await query.edit_message_text(
+            f"✏️ SỬA STOCK #{stock_id}\n\n"
+            f"📝 Nội dung hiện tại:\n{stock[2]}\n\n"
+            f"Nhập nội dung mới:"
+        )
+        return EDIT_STOCK_CONTENT
+    
+    await query.edit_message_text("❌ Stock không tồn tại!", reply_markup=back_keyboard("admin_manage_stock"))
+    return ConversationHandler.END
+
+async def admin_edit_stock_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Hoàn thành sửa stock"""
+    stock_id = context.user_data.get('edit_stock_id')
+    if not stock_id:
+        await update.message.reply_text("❌ Lỗi! Vui lòng thử lại.")
+        return ConversationHandler.END
+    
+    new_content = update.message.text.strip()
+    await update_stock_content(stock_id, new_content)
+    
+    stock = await get_stock_detail(stock_id)
+    product_id = stock[1] if stock else None
+    
+    await update.message.reply_text(
+        f"✅ Đã cập nhật stock #{stock_id}!",
+        reply_markup=back_keyboard(f"admin_viewstock_{product_id}" if product_id else "admin_manage_stock")
+    )
+    return ConversationHandler.END
+
+async def admin_delete_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xóa một stock"""
+    query = update.callback_query
+    await query.answer()
+    
+    parts = query.data.split("_")
+    stock_id = int(parts[2])
+    product_id = int(parts[3])
+    
+    await delete_stock(stock_id)
+    
+    # Quay lại danh sách stock
+    product = await get_product(product_id)
+    stocks = await get_stock_by_product(product_id)
+    
+    if not stocks:
+        await query.edit_message_text(
+            f"✅ Đã xóa stock!\n\n📦 {product['name']}\n\n❌ Không còn stock nào!",
+            reply_markup=back_keyboard("admin_manage_stock")
+        )
+        return
+    
+    total = len(stocks)
+    sold = sum(1 for s in stocks if s[2])
+    available = total - sold
+    
+    text = f"✅ Đã xóa stock!\n\n📦 {product['name']}\n\n📊 Tổng: {total} | 🟢 Còn: {available} | 🔴 Đã bán: {sold}"
+    await query.edit_message_text(text, reply_markup=admin_stock_list_keyboard(stocks, product_id))
 
 # Bank settings
 async def admin_bank_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
