@@ -28,9 +28,9 @@ from handlers.admin import (
     set_account_name_start, set_account_name_done,
     set_sepay_token_start, set_sepay_token_done,
     cancel_conversation, ADD_PRODUCT_NAME, ADD_PRODUCT_PRICE, ADD_STOCK_CONTENT,
-    BANK_NAME, ACCOUNT_NUMBER, ACCOUNT_NAME, SEPAY_TOKEN,
+    BANK_NAME, ACCOUNT_NUMBER, ACCOUNT_NAME, SEPAY_TOKEN, NOTIFICATION_MESSAGE,
     handle_admin_products_text, handle_admin_stock_text, handle_admin_withdrawals_text,
-    handle_admin_bank_text, handle_exit_admin
+    handle_admin_bank_text, handle_exit_admin, notification_command, notification_send
 )
 from sepay_checker import run_checker, init_checker_db
 
@@ -127,6 +127,16 @@ def setup_bot():
     # Commands
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("admin", admin_command))
+    
+    # Notification conversation
+    notification_conv = ConversationHandler(
+        entry_points=[CommandHandler("notification", notification_command)],
+        states={
+            NOTIFICATION_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, notification_send)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+    )
+    app.add_handler(notification_conv)
     
     # Conversations
     app.add_handler(add_product_conv)

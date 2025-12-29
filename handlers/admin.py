@@ -4,7 +4,7 @@ from database import (
     get_products, add_product, delete_product, add_stock_bulk,
     get_pending_deposits, confirm_deposit, cancel_deposit, get_stats,
     get_pending_withdrawals, confirm_withdrawal, cancel_withdrawal,
-    get_bank_settings, set_setting, get_setting
+    get_bank_settings, set_setting, get_setting, get_all_user_ids
 )
 from keyboards import (
     admin_menu_keyboard, admin_products_keyboard, admin_stock_keyboard,
@@ -17,6 +17,7 @@ from config import ADMIN_IDS
 ADD_PRODUCT_NAME, ADD_PRODUCT_PRICE = range(2)
 ADD_STOCK_CONTENT = 10
 BANK_NAME, ACCOUNT_NUMBER, ACCOUNT_NAME, SEPAY_TOKEN = range(20, 24)
+NOTIFICATION_MESSAGE = 30
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
@@ -453,6 +454,55 @@ async def handle_exit_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👋 Đã thoát Admin Panel",
         reply_markup=user_reply_keyboard()
     )
+
+# Notification to all users
+async def notification_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Lệnh /notification để gửi thông báo đến tất cả user"""
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ Bạn không có quyền sử dụng lệnh này!")
+        return ConversationHandler.END
+    
+    await update.message.reply_text(
+        "📢 GỬI THÔNG BÁO\n\n"
+        "Nhập nội dung thông báo muốn gửi đến tất cả user:\n\n"
+        "💡 Gợi ý: Bạn có thể dùng emoji và xuống dòng thoải mái.\n"
+        "Gửi /cancel để hủy."
+    )
+    return NOTIFICATION_MESSAGE
+
+async def notification_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gửi thông báo đến tất cả user"""
+    message_content = update.message.text
+    
+    # Lấy tất cả user
+    user_ids = await get_all_user_ids()
+    
+    if not user_ids:
+        await update.message.reply_text("❌ Chưa có user nào trong hệ thống!")
+        return ConversationHandler.END
+    
+    # Format thông báo
+    notification_text = f"📢 Thông báo từ Admin:\n\n{message_content}"
+    
+    await update.message.reply_text(f"⏳ Đang gửi thông báo đến {len(user_ids)} user...")
+    
+    success = 0
+    failed = 0
+    
+    for uid in user_ids:
+        try:
+            await context.bot.send_message(chat_id=uid, text=notification_text)
+            success += 1
+        except Exception:
+            failed += 1
+    
+    await update.message.reply_text(
+        f"✅ Đã gửi thông báo!\n\n"
+        f"📤 Thành công: {success}\n"
+        f"❌ Thất bại: {failed} (user đã block bot)"
+    )
+    return ConversationHandler.END
 
 # Bank settings
 async def admin_bank_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):

@@ -227,6 +227,13 @@ async def get_stats():
         revenue = (await (await db.execute("SELECT COALESCE(SUM(price), 0) FROM orders")).fetchone())[0]
         return {"users": users, "orders": orders, "revenue": revenue}
 
+async def get_all_user_ids():
+    """Lấy tất cả user_id để gửi thông báo"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT user_id FROM users")
+        rows = await cursor.fetchall()
+        return [row[0] for row in rows]
+
 # Withdrawal functions
 async def create_withdrawal(user_id: int, amount: int, momo_phone: str):
     async with aiosqlite.connect(DB_PATH) as db:
