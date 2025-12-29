@@ -1,10 +1,13 @@
 import aiosqlite
 import json
+import os
 from datetime import datetime
 
 DB_PATH = "data/shop.db"
 
 async def init_db():
+    # Ensure data directory exists
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (

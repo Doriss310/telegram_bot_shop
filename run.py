@@ -50,9 +50,15 @@ logging.getLogger('telegram').setLevel(logging.WARNING)
 
 async def post_init(application):
     os.makedirs("data", exist_ok=True)
+    logger.info("📁 Data directory ready")
+    
+    # Init main database
     await init_db()
+    logger.info("✅ Main database initialized!")
+    
+    # Init checker database
     await init_checker_db()
-    logger.info("✅ Database initialized!")
+    logger.info("✅ Checker database initialized!")
 
 def setup_bot():
     app = (
