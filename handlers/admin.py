@@ -1,0 +1,673 @@
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters
+from database import (
+    get_products, add_product, delete_product, add_stock_bulk,
+    get_pending_deposits, confirm_deposit, cancel_deposit, get_stats,
+    get_pending_withdrawals, confirm_withdrawal, cancel_withdrawal,
+    get_bank_settings, set_setting, get_setting
+)
+from keyboards import (
+    admin_menu_keyboard, admin_products_keyboard, admin_stock_keyboard,
+    pending_deposits_keyboard, pending_withdrawals_keyboard, back_keyboard, main_menu_keyboard,
+    admin_reply_keyboard, user_reply_keyboard
+)
+from config import ADMIN_IDS
+
+# States
+ADD_PRODUCT_NAME, ADD_PRODUCT_PRICE = range(2)
+ADD_STOCK_CONTENT = 10
+BANK_NAME, ACCOUNT_NUMBER, ACCOUNT_NAME, SEPAY_TOKEN = range(20, 24)
+
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
+
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ Bạn không có quyền truy cập!")
+        return
+    
+    # Gửi reply keyboard admin
+    await update.message.reply_text(
+        "🔐 ADMIN PANEL\n\nChọn chức năng quản trị:",
+        reply_markup=admin_reply_keyboard()
+    )
+
+async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if not is_admin(query.from_user.id):
+        await query.edit_message_text("❌ Bạn không có quyền truy cập!")
+        return
+    
+    text = """
+🔐 ADMIN PANEL
+
+Chọn chức năng quản trị:
+"""
+    await query.edit_message_text(text, reply_markup=admin_menu_keyboard())
+
+async def admin_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    products = await get_products()
+    text = "📦 QUẢN LÝ SẢN PHẨM\n\nNhấn ❌ để xóa sản phẩm:"
+    await query.edit_message_text(text, reply_markup=admin_products_keyboard(products))
+
+async def admin_delete_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    product_id = int(query.data.split("_")[2])
+    await delete_product(product_id)
+    
+    products = await get_products()
+    text = "✅ Đã xóa sản phẩm!\n\n📦 QUẢN LÝ SẢN PHẨM:"
+    await query.edit_message_text(text, reply_markup=admin_products_keyboard(products))
+
+async def admin_add_product_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text("📝 Nhập tên sản phẩm:")
+    return ADD_PRODUCT_NAME
+
+async def admin_add_product_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['new_product_name'] = update.message.text
+    await update.message.reply_text("💰 Nhập giá sản phẩm (VNĐ):")
+    return ADD_PRODUCT_PRICE
+
+async def admin_add_product_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        price = int(update.message.text.replace(",", "").replace(".", ""))
+        name = context.user_data['new_product_name']
+        
+        await add_product(name, price)
+        await update.message.reply_text(
+            f"✅ Đã thêm sản phẩm:\n📦 {name}\n💰 {price:,}đ",
+            reply_markup=back_keyboard("admin_products")
+        )
+    except ValueError:
+        await update.message.reply_text("❌ Giá không hợp lệ! Vui lòng nhập số:")
+        return ADD_PRODUCT_PRICE
+    
+    return ConversationHandler.END
+
+async def admin_add_stock_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    products = await get_products()
+    text = "📥 THÊM STOCK\n\nChọn sản phẩm để thêm stock:"
+    await query.edit_message_text(text, reply_markup=admin_stock_keyboard(products))
+
+async def admin_select_stock_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    product_id = int(query.data.split("_")[2])
+    context.user_data['stock_product_id'] = product_id
+    
+    await query.edit_message_text(
+        "📝 Gửi stock (mỗi dòng là 1 sản phẩm):\n\nVí dụ:\nacc1@gmail.com|pass123\nacc2@gmail.com|pass456"
+    )
+    return ADD_STOCK_CONTENT
+
+async def admin_add_stock_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    product_id = context.user_data.get('stock_product_id')
+    if not product_id:
+        await update.message.reply_text("❌ Lỗi! Vui lòng thử lại.")
+        return ConversationHandler.END
+    
+    lines = update.message.text.strip().split("\n")
+    contents = [line.strip() for line in lines if line.strip()]
+    
+    if contents:
+        await add_stock_bulk(product_id, contents)
+    
+    await update.message.reply_text(
+        f"✅ Đã thêm {len(contents)} stock!",
+        reply_markup=back_keyboard("admin_add_stock")
+    )
+    return ConversationHandler.END
+
+
+# Deposit management
+async def admin_deposits(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    deposits = await get_pending_deposits()
+    
+    if not deposits:
+        await query.edit_message_text(
+            "💳 Không có yêu cầu nạp tiền nào đang chờ duyệt.",
+            reply_markup=back_keyboard("admin")
+        )
+        return
+    
+    text = "💳 DUYỆT NẠP TIỀN\n\n"
+    for d in deposits:
+        text += f"#{d[0]} | User: {d[1]} | {d[2]:,}đ | Code: {d[3]}\n"
+    
+    await query.edit_message_text(text, reply_markup=pending_deposits_keyboard(deposits))
+
+async def admin_confirm_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    deposit_id = int(query.data.split("_")[2])
+    result = await confirm_deposit(deposit_id)
+    
+    if result:
+        user_id, amount = result
+        # Notify user
+        try:
+            await context.bot.send_message(
+                user_id,
+                f"✅ Nạp tiền thành công!\n\n💰 Số tiền: {amount:,}đ\n\nCảm ơn bạn đã sử dụng dịch vụ!"
+            )
+        except:
+            pass
+    
+    deposits = await get_pending_deposits()
+    text = "✅ Đã duyệt nạp tiền!\n\n💳 DUYỆT NẠP TIỀN:"
+    
+    if not deposits:
+        await query.edit_message_text(text + "\nKhông còn yêu cầu nào.", reply_markup=back_keyboard("admin"))
+    else:
+        await query.edit_message_text(text, reply_markup=pending_deposits_keyboard(deposits))
+
+async def admin_cancel_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    deposit_id = int(query.data.split("_")[2])
+    await cancel_deposit(deposit_id)
+    
+    deposits = await get_pending_deposits()
+    text = "❌ Đã hủy yêu cầu nạp tiền!\n\n💳 DUYỆT NẠP TIỀN:"
+    
+    if not deposits:
+        await query.edit_message_text(text + "\nKhông còn yêu cầu nào.", reply_markup=back_keyboard("admin"))
+    else:
+        await query.edit_message_text(text, reply_markup=pending_deposits_keyboard(deposits))
+
+async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    stats = await get_stats()
+    products = await get_products()
+    
+    text = f"""
+📊 THỐNG KÊ HỆ THỐNG
+
+👥 Tổng người dùng: {stats['users']}
+🛒 Tổng đơn hàng: {stats['orders']}
+💰 Tổng doanh thu: {stats['revenue']:,}đ
+
+📦 Sản phẩm:
+"""
+    for p in products:
+        text += f"• {p['name']}: còn {p['stock']} stock\n"
+    
+    await query.edit_message_text(text, reply_markup=back_keyboard("admin"))
+
+# Withdrawal management
+async def admin_withdrawals(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    withdrawals = await get_pending_withdrawals()
+    
+    if not withdrawals:
+        await query.edit_message_text(
+            "💸 Không có yêu cầu rút tiền nào đang chờ duyệt.",
+            reply_markup=back_keyboard("admin")
+        )
+        return
+    
+    text = "💸 DUYỆT RÚT TIỀN\n\nChọn yêu cầu để xem chi tiết & QR:\n\n"
+    for w in withdrawals:
+        text += f"#{w[0]} | {w[2]:,}đ | {w[3]}\n"
+    
+    await query.edit_message_text(text, reply_markup=pending_withdrawals_keyboard(withdrawals))
+
+async def admin_view_withdrawal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xem chi tiết yêu cầu rút tiền + QR code"""
+    query = update.callback_query
+    await query.answer()
+    
+    withdrawal_id = int(query.data.split("_")[2])
+    
+    # Lấy thông tin withdrawal
+    from database import get_withdrawal_detail
+    withdrawal = await get_withdrawal_detail(withdrawal_id)
+    
+    if not withdrawal:
+        await query.edit_message_text("❌ Không tìm thấy yêu cầu!", reply_markup=back_keyboard("admin_withdraws"))
+        return
+    
+    w_id, user_id, amount, bank_info, status, created_at = withdrawal
+    
+    # Parse bank_info (format: "BankName - AccountNumber")
+    parts = bank_info.split(" - ")
+    if len(parts) == 2:
+        bank_name, account_number = parts
+    else:
+        bank_name = "Unknown"
+        account_number = bank_info
+    
+    # Tạo QR VietQR hoặc MoMo
+    from handlers.shop import BANK_CODES
+    bank_code = BANK_CODES.get(bank_name, "")
+    
+    if bank_code == "MOMO" or bank_name.lower() == "momo":
+        # MoMo không hỗ trợ VietQR chuẩn, hiện thông tin để chuyển thủ công
+        qr_url = None
+        bank_display = "MoMo"
+    elif bank_code:
+        # QR VietQR cho ngân hàng
+        qr_url = f"https://img.vietqr.io/image/{bank_code}-{account_number}-compact2.png?amount={amount}&addInfo=Rut%20tien"
+        bank_display = bank_name
+    else:
+        # Không có QR, hiện thông tin thủ công
+        qr_url = None
+        bank_display = bank_name
+    
+    text = f"""
+💸 CHI TIẾT YÊU CẦU RÚT TIỀN #{w_id}
+
+👤 User ID: {user_id}
+💰 Số tiền: {amount:,}đ
+🏦 Ngân hàng: {bank_display}
+🔢 Số TK/SĐT: {account_number}
+📅 Thời gian: {created_at[:19]}
+"""
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Đã chuyển - Duyệt", callback_data=f"admin_confirm_withdraw_{w_id}")],
+        [InlineKeyboardButton("❌ Từ chối", callback_data=f"admin_cancel_withdraw_{w_id}")],
+        [InlineKeyboardButton("🔙 Quay lại", callback_data="admin_withdraws")],
+    ]
+    
+    # Gửi ảnh QR nếu có
+    try:
+        await query.message.delete()
+        if qr_url:
+            await context.bot.send_photo(
+                chat_id=query.message.chat_id,
+                photo=qr_url,
+                caption=text + "\n⬇️ Quét QR để chuyển tiền:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        else:
+            if bank_display == "MoMo":
+                text += "\n📱 Mở app MoMo → Chuyển tiền → Nhập SĐT trên"
+            else:
+                text += "\n⚠️ Vui lòng chuyển khoản thủ công"
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=text,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+    except Exception as e:
+        # Fallback
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=text + (f"\n🔗 QR: {qr_url}" if qr_url else ""),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+async def admin_confirm_withdrawal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    withdrawal_id = int(query.data.split("_")[3])
+    result = await confirm_withdrawal(withdrawal_id)
+    
+    if result:
+        user_id, amount, bank_info = result
+        try:
+            await context.bot.send_message(
+                user_id,
+                f"✅ RÚT TIỀN THÀNH CÔNG!\n\n"
+                f"💰 Số tiền: {amount:,}đ\n"
+                f"🏦 Tài khoản: {bank_info}\n\n"
+                f"💸 Tiền đã được chuyển vào tài khoản của bạn!"
+            )
+        except Exception as e:
+            print(f"Error sending withdrawal notification: {e}")
+        
+        text = "✅ Đã duyệt rút tiền!"
+    else:
+        text = "❌ Không thể duyệt! User không đủ số dư."
+    
+    # Xóa message cũ (có thể là ảnh QR)
+    try:
+        await query.message.delete()
+    except:
+        pass
+    
+    withdrawals = await get_pending_withdrawals()
+    text += "\n\n💸 DUYỆT RÚT TIỀN:"
+    
+    if not withdrawals:
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=text + "\nKhông còn yêu cầu nào.",
+            reply_markup=back_keyboard("admin")
+        )
+    else:
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=text,
+            reply_markup=pending_withdrawals_keyboard(withdrawals)
+        )
+
+async def admin_cancel_withdrawal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    withdrawal_id = int(query.data.split("_")[3])
+    result = await cancel_withdrawal(withdrawal_id)
+    
+    if result:
+        user_id, amount = result
+        try:
+            await context.bot.send_message(
+                user_id,
+                f"❌ Yêu cầu rút tiền bị từ chối!\n\n💰 Số tiền {amount:,}đ đã được hoàn lại vào tài khoản."
+            )
+        except:
+            pass
+    
+    withdrawals = await get_pending_withdrawals()
+    text = "❌ Đã hủy yêu cầu rút tiền!\n\n💸 DUYỆT RÚT TIỀN:"
+    
+    if not withdrawals:
+        await query.edit_message_text(text + "\nKhông còn yêu cầu nào.", reply_markup=back_keyboard("admin"))
+    else:
+        await query.edit_message_text(text, reply_markup=pending_withdrawals_keyboard(withdrawals))
+
+async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ Đã hủy.", reply_markup=user_reply_keyboard())
+    return ConversationHandler.END
+
+# Admin reply keyboard handlers
+async def handle_admin_products_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    products = await get_products()
+    text = "📦 QUẢN LÝ SẢN PHẨM\n\nNhấn ❌ để xóa sản phẩm:"
+    await update.message.reply_text(text, reply_markup=admin_products_keyboard(products))
+
+async def handle_admin_stock_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    products = await get_products()
+    text = "📥 THÊM STOCK\n\nChọn sản phẩm để thêm stock:"
+    await update.message.reply_text(text, reply_markup=admin_stock_keyboard(products))
+
+async def handle_admin_withdrawals_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    withdrawals = await get_pending_withdrawals()
+    if not withdrawals:
+        await update.message.reply_text(
+            "💸 Không có yêu cầu rút tiền nào đang chờ duyệt.",
+            reply_markup=back_keyboard("admin")
+        )
+        return
+    text = "💸 DUYỆT RÚT TIỀN\n\n"
+    for w in withdrawals:
+        text += f"#{w[0]} | User: {w[1]} | {w[2]:,}đ | SĐT: {w[3]}\n"
+    await update.message.reply_text(text, reply_markup=pending_withdrawals_keyboard(withdrawals))
+
+async def handle_admin_bank_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    settings = await get_bank_settings()
+    text = f"""
+🏦 CÀI ĐẶT NGÂN HÀNG
+
+📌 Thông tin hiện tại:
+• Ngân hàng: {settings['bank_name'] or 'Chưa cài đặt'}
+• Số TK: {settings['account_number'] or 'Chưa cài đặt'}
+• Tên TK: {settings['account_name'] or 'Chưa cài đặt'}
+• SePay Token: {'✅ Đã cài' if settings['sepay_token'] else '❌ Chưa cài'}
+
+📎 Lấy token tại: https://my.sepay.vn/companyapi
+"""
+    keyboard = [
+        [InlineKeyboardButton("🔑 Cài đặt SePay Token", callback_data="set_sepay_token")],
+        [InlineKeyboardButton("🔄 Cập nhật từ SePay", callback_data="refresh_bank_info")],
+    ]
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def handle_exit_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "👋 Đã thoát Admin Panel",
+        reply_markup=user_reply_keyboard()
+    )
+
+# Bank settings
+async def admin_bank_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    settings = await get_bank_settings()
+    
+    text = f"""
+🏦 CÀI ĐẶT NGÂN HÀNG
+
+📌 Thông tin hiện tại:
+• Ngân hàng: {settings['bank_name'] or 'Chưa cài đặt'}
+• Số TK: {settings['account_number'] or 'Chưa cài đặt'}
+• Tên TK: {settings['account_name'] or 'Chưa cài đặt'}
+• SePay Token: {'✅ Đã cài' if settings['sepay_token'] else '❌ Chưa cài'}
+
+📎 Lấy token tại: https://my.sepay.vn/companyapi
+"""
+    keyboard = [
+        [InlineKeyboardButton("🔑 Cài đặt SePay Token", callback_data="set_sepay_token")],
+        [InlineKeyboardButton("🔄 Cập nhật từ SePay", callback_data="refresh_bank_info")],
+        [InlineKeyboardButton("🔙 Quay lại", callback_data="admin")],
+    ]
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def refresh_bank_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cập nhật lại thông tin ngân hàng từ SePay"""
+    query = update.callback_query
+    await query.answer("Đang cập nhật...")
+    
+    import aiohttp
+    
+    token = await get_setting("sepay_token", "")
+    if not token:
+        await query.edit_message_text(
+            "❌ Chưa cài đặt SePay Token!\n\nVui lòng cài đặt token trước.",
+            reply_markup=back_keyboard("admin_bank_settings")
+        )
+        return
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            }
+            
+            async with session.get(
+                "https://my.sepay.vn/userapi/bankaccounts/list",
+                headers=headers
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    bank_accounts = data.get('bankaccounts', [])
+                    
+                    if bank_accounts:
+                        # Lấy tài khoản active đầu tiên
+                        account = None
+                        for acc in bank_accounts:
+                            if acc.get('active') == '1':
+                                account = acc
+                                break
+                        if not account:
+                            account = bank_accounts[0]
+                        
+                        bank_name = account.get('bank_short_name', '') or account.get('bank_name', '')
+                        account_number = account.get('account_number', '')
+                        account_name = account.get('account_holder_name', '')
+                        
+                        await set_setting("bank_name", bank_name)
+                        await set_setting("account_number", account_number)
+                        await set_setting("account_name", account_name)
+                        
+                        text = f"""
+✅ CẬP NHẬT THÀNH CÔNG!
+
+🏦 Ngân hàng: {bank_name}
+🔢 Số TK: {account_number}
+👤 Tên TK: {account_name}
+"""
+                        await query.edit_message_text(text, reply_markup=back_keyboard("admin_bank_settings"))
+                    else:
+                        await query.edit_message_text(
+                            "⚠️ Không tìm thấy tài khoản ngân hàng nào!\n\n"
+                            "Vui lòng liên kết tài khoản tại: https://my.sepay.vn/bankaccount",
+                            reply_markup=back_keyboard("admin_bank_settings")
+                        )
+                else:
+                    await query.edit_message_text(
+                        f"❌ Lỗi kết nối SePay! (Mã {resp.status})\n\nToken có thể đã hết hạn.",
+                        reply_markup=back_keyboard("admin_bank_settings")
+                    )
+    except Exception as e:
+        await query.edit_message_text(
+            f"❌ Lỗi: {str(e)}",
+            reply_markup=back_keyboard("admin_bank_settings")
+        )
+
+async def set_bank_name_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "🏦 Nhập tên ngân hàng:\n\nVí dụ: VietinBank, MBBank, Vietcombank, BIDV, Techcombank..."
+    )
+    return BANK_NAME
+
+async def set_bank_name_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await set_setting("bank_name", update.message.text.strip())
+    await update.message.reply_text("✅ Đã cập nhật tên ngân hàng!", reply_markup=back_keyboard("admin_bank_settings"))
+    return ConversationHandler.END
+
+async def set_account_number_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("🔢 Nhập số tài khoản ngân hàng:")
+    return ACCOUNT_NUMBER
+
+async def set_account_number_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await set_setting("account_number", update.message.text.strip())
+    await update.message.reply_text("✅ Đã cập nhật số tài khoản!", reply_markup=back_keyboard("admin_bank_settings"))
+    return ConversationHandler.END
+
+async def set_account_name_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("👤 Nhập tên chủ tài khoản (viết HOA, không dấu):")
+    return ACCOUNT_NAME
+
+async def set_account_name_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await set_setting("account_name", update.message.text.strip().upper())
+    await update.message.reply_text("✅ Đã cập nhật tên tài khoản!", reply_markup=back_keyboard("admin_bank_settings"))
+    return ConversationHandler.END
+
+async def set_sepay_token_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "🔑 Nhập SePay API Token:\n\n"
+        "Lấy token tại: https://my.sepay.vn/companyapi\n\n"
+        "⚡ Bot sẽ tự động lấy thông tin ngân hàng từ SePay!"
+    )
+    return SEPAY_TOKEN
+
+async def set_sepay_token_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    import aiohttp
+    
+    token = update.message.text.strip()
+    await update.message.reply_text("⏳ Đang kiểm tra token và lấy thông tin ngân hàng...")
+    
+    # Gọi API SePay để lấy thông tin tài khoản
+    try:
+        async with aiohttp.ClientSession() as session:
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            }
+            
+            # Lấy danh sách tài khoản ngân hàng
+            async with session.get(
+                "https://my.sepay.vn/userapi/bankaccounts/list",
+                headers=headers
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    bank_accounts = data.get('bankaccounts', [])
+                    
+                    if bank_accounts:
+                        # Lấy tài khoản đầu tiên (hoặc tài khoản active)
+                        account = bank_accounts[0]
+                        bank_name = account.get('bank_short_name', '') or account.get('bank_name', '')
+                        account_number = account.get('account_number', '')
+                        account_name = account.get('account_holder_name', '')
+                        
+                        # Lưu tất cả vào database
+                        await set_setting("sepay_token", token)
+                        await set_setting("bank_name", bank_name)
+                        await set_setting("account_number", account_number)
+                        await set_setting("account_name", account_name)
+                        
+                        text = f"""
+✅ CẬP NHẬT THÀNH CÔNG!
+
+🔑 SePay Token: Đã lưu
+🏦 Ngân hàng: {bank_name}
+🔢 Số TK: {account_number}
+👤 Tên TK: {account_name}
+
+⚡ Thông tin đã được tự động cập nhật từ SePay!
+"""
+                        await update.message.reply_text(text, reply_markup=back_keyboard("admin_bank_settings"))
+                        return ConversationHandler.END
+                    else:
+                        await set_setting("sepay_token", token)
+                        await update.message.reply_text(
+                            "⚠️ Token hợp lệ nhưng chưa có tài khoản ngân hàng nào được liên kết!\n\n"
+                            "Vui lòng liên kết tài khoản tại: https://my.sepay.vn/bankaccount",
+                            reply_markup=back_keyboard("admin_bank_settings")
+                        )
+                        return ConversationHandler.END
+                else:
+                    await update.message.reply_text(
+                        f"❌ Token không hợp lệ! (Lỗi {resp.status})\n\n"
+                        "Vui lòng kiểm tra lại token tại: https://my.sepay.vn/companyapi",
+                        reply_markup=back_keyboard("admin_bank_settings")
+                    )
+                    return ConversationHandler.END
+                    
+    except Exception as e:
+        # Nếu lỗi, vẫn lưu token
+        await set_setting("sepay_token", token)
+        await update.message.reply_text(
+            f"⚠️ Đã lưu token nhưng không thể lấy thông tin tự động.\n"
+            f"Lỗi: {str(e)}\n\n"
+            "Bạn có thể nhập thông tin ngân hàng thủ công.",
+            reply_markup=back_keyboard("admin_bank_settings")
+        )
+        return ConversationHandler.END

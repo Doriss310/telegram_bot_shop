@@ -1,0 +1,14 @@
+__pycache__
+*.pyc
+*.pyo
+.git
+.gitignore
+*.md
+.env.example
+venv
+.venv
+*.log
+test_*.py
+check_*.py
+*.service
+deploy.sh
