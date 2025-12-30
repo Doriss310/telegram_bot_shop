@@ -288,6 +288,41 @@ async def get_order_detail(order_id: int):
         )
         return await cursor.fetchone()
 
+async def get_sold_codes_by_product(product_id: int, limit: int = 100):
+    """Lấy danh sách code đã bán theo sản phẩm"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """SELECT o.id, o.user_id, o.content, o.price, o.quantity, o.created_at
+               FROM orders o
+               WHERE o.product_id = ?
+               ORDER BY o.created_at DESC
+               LIMIT ?""",
+            (product_id, limit)
+        )
+        return await cursor.fetchall()
+
+async def get_sold_codes_by_user(user_id: int, limit: int = 50):
+    """Lấy danh sách code đã bán cho 1 user"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """SELECT o.id, p.name, o.content, o.price, o.quantity, o.created_at
+               FROM orders o JOIN products p ON o.product_id = p.id
+               WHERE o.user_id = ?
+               ORDER BY o.created_at DESC
+               LIMIT ?""",
+            (user_id, limit)
+        )
+        return await cursor.fetchall()
+
+async def search_user_by_id(user_id: int):
+    """Tìm user theo ID"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT user_id, username, balance, created_at FROM users WHERE user_id = ?",
+            (user_id,)
+        )
+        return await cursor.fetchone()
+
 # Deposit functions
 async def create_deposit(user_id: int, amount: int, code: str):
     async with aiosqlite.connect(DB_PATH) as db:

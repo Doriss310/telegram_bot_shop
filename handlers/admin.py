@@ -6,13 +6,13 @@ from database import (
     get_pending_withdrawals, confirm_withdrawal, cancel_withdrawal,
     get_bank_settings, set_setting, get_setting, get_all_user_ids,
     get_stock_by_product, get_stock_detail, update_stock_content, delete_stock, get_product,
-    delete_all_stock, export_stock
+    delete_all_stock, export_stock, get_sold_codes_by_product, get_sold_codes_by_user, search_user_by_id
 )
 from keyboards import (
     admin_menu_keyboard, admin_products_keyboard, admin_stock_keyboard,
     pending_deposits_keyboard, pending_withdrawals_keyboard, back_keyboard, main_menu_keyboard,
     admin_reply_keyboard, user_reply_keyboard, admin_view_stock_keyboard,
-    admin_stock_list_keyboard, admin_stock_detail_keyboard
+    admin_stock_list_keyboard, admin_stock_detail_keyboard, admin_sold_codes_keyboard
 )
 import io
 from config import ADMIN_IDS
@@ -23,6 +23,7 @@ ADD_STOCK_CONTENT = 10
 BANK_NAME, ACCOUNT_NUMBER, ACCOUNT_NAME, SEPAY_TOKEN = range(20, 24)
 NOTIFICATION_MESSAGE = 30
 EDIT_STOCK_CONTENT = 31
+SEARCH_USER_ID = 32
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
@@ -477,6 +478,14 @@ async def handle_admin_manage_stock_text(update: Update, context: ContextTypes.D
     products = await get_products()
     text = "📋 QUẢN LÝ STOCK\n\nChọn sản phẩm để xem/sửa stock:"
     await update.message.reply_text(text, reply_markup=admin_view_stock_keyboard(products))
+
+async def handle_admin_sold_codes_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler cho nút text Xem code đã bán"""
+    if not is_admin(update.effective_user.id):
+        return
+    products = await get_products()
+    text = "📜 XEM CODE ĐÃ BÁN\n\nChọn sản phẩm hoặc tìm theo User ID:"
+    await update.message.reply_text(text, reply_markup=admin_sold_codes_keyboard(products))
 
 async def handle_admin_withdrawals_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -1006,3 +1015,204 @@ async def set_sepay_token_done(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_markup=back_keyboard("admin_bank_settings")
         )
         return ConversationHandler.END
+
+
+# ============ XEM CODE ĐÃ BÁN ============
+
+async def admin_sold_codes_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Menu xem code đã bán"""
+    query = update.callback_query
+    await query.answer()
+    
+    products = await get_products()
+    text = "📜 XEM CODE ĐÃ BÁN\n\nChọn sản phẩm hoặc tìm theo User ID:"
+    await query.edit_message_text(text, reply_markup=admin_sold_codes_keyboard(products))
+
+async def admin_sold_by_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xem code đã bán theo sản phẩm"""
+    query = update.callback_query
+    await query.answer()
+    
+    product_id = int(query.data.split("_")[3])
+    product = await get_product(product_id)
+    orders = await get_sold_codes_by_product(product_id)
+    
+    if not orders:
+        await query.edit_message_text(
+            f"📦 {product['name']}\n\n❌ Chưa có đơn hàng nào!",
+            reply_markup=back_keyboard("admin_sold_codes")
+        )
+        return
+    
+    text = f"📦 {product['name']}\n📜 {len(orders)} đơn hàng gần nhất:\n\n"
+    
+    # Tạo file để gửi nếu có nhiều đơn
+    import json
+    file_content = f"=== CODE ĐÃ BÁN - {product['name']} ===\n\n"
+    
+    for order in orders[:10]:  # Hiển thị 10 đơn gần nhất trong message
+        order_id, user_id, content, price, quantity, created_at = order
+        qty_text = f" x{quantity}" if quantity and quantity > 1 else ""
+        text += f"#{order_id} | User: {user_id} | {price:,}đ{qty_text}\n"
+        text += f"📅 {created_at[:16]}\n"
+        
+        # Parse content (có thể là JSON array hoặc string)
+        try:
+            codes = json.loads(content)
+            if isinstance(codes, list):
+                text += f"📝 {len(codes)} code\n\n"
+            else:
+                short = content[:30] + "..." if len(content) > 30 else content
+                text += f"📝 {short}\n\n"
+        except:
+            short = content[:30] + "..." if len(content) > 30 else content
+            text += f"📝 {short}\n\n"
+    
+    # Tạo nội dung file đầy đủ
+    for order in orders:
+        order_id, user_id, content, price, quantity, created_at = order
+        file_content += f"--- Đơn #{order_id} ---\n"
+        file_content += f"User ID: {user_id}\n"
+        file_content += f"Giá: {price:,}đ\n"
+        file_content += f"Thời gian: {created_at}\n"
+        file_content += f"Code:\n"
+        try:
+            codes = json.loads(content)
+            if isinstance(codes, list):
+                file_content += "\n".join(codes)
+            else:
+                file_content += content
+        except:
+            file_content += content
+        file_content += "\n\n"
+    
+    if len(orders) > 10:
+        text += f"... và {len(orders) - 10} đơn khác"
+    
+    keyboard = [
+        [InlineKeyboardButton("📤 Tải file đầy đủ", callback_data=f"admin_export_sold_{product_id}")],
+        [InlineKeyboardButton("🔙 Quay lại", callback_data="admin_sold_codes")],
+    ]
+    
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    # Lưu file content để export
+    context.user_data['sold_codes_export'] = file_content
+    context.user_data['sold_codes_product'] = product['name']
+
+async def admin_export_sold_codes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Export code đã bán ra file"""
+    query = update.callback_query
+    await query.answer("Đang tạo file...")
+    
+    file_content = context.user_data.get('sold_codes_export', '')
+    product_name = context.user_data.get('sold_codes_product', 'unknown')
+    
+    if not file_content:
+        await query.edit_message_text("❌ Không có dữ liệu!", reply_markup=back_keyboard("admin_sold_codes"))
+        return
+    
+    filename = f"sold_codes_{product_name}.txt"
+    file_buf = io.BytesIO(file_content.encode('utf-8'))
+    file_buf.seek(0)
+    
+    await context.bot.send_document(
+        chat_id=query.message.chat_id,
+        document=file_buf,
+        filename=filename,
+        caption=f"📤 Code đã bán - {product_name}"
+    )
+
+async def admin_sold_by_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Bắt đầu tìm code theo User ID"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "🔍 TÌM CODE THEO USER\n\n"
+        "Nhập User ID (số Telegram ID):\n\n"
+        "Gửi /cancel để hủy"
+    )
+    return SEARCH_USER_ID
+
+async def admin_sold_by_user_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Tìm và hiển thị code đã bán cho user"""
+    import json
+    
+    try:
+        user_id = int(update.message.text.strip())
+    except ValueError:
+        await update.message.reply_text("❌ User ID phải là số! Nhập lại:")
+        return SEARCH_USER_ID
+    
+    # Kiểm tra user có tồn tại không
+    user = await search_user_by_id(user_id)
+    orders = await get_sold_codes_by_user(user_id)
+    
+    if not orders:
+        await update.message.reply_text(
+            f"👤 User ID: {user_id}\n"
+            f"{'📛 Username: @' + user[1] if user and user[1] else ''}\n\n"
+            f"❌ User này chưa mua gì!",
+            reply_markup=back_keyboard("admin_sold_codes")
+        )
+        return ConversationHandler.END
+    
+    text = f"👤 User ID: {user_id}\n"
+    if user and user[1]:
+        text += f"📛 Username: @{user[1]}\n"
+    text += f"📜 {len(orders)} đơn hàng:\n\n"
+    
+    file_content = f"=== CODE ĐÃ BÁN CHO USER {user_id} ===\n\n"
+    
+    for order in orders[:10]:
+        order_id, product_name, content, price, quantity, created_at = order
+        qty_text = f" x{quantity}" if quantity and quantity > 1 else ""
+        text += f"#{order_id} | {product_name} | {price:,}đ{qty_text}\n"
+        text += f"📅 {created_at[:16]}\n"
+        
+        try:
+            codes = json.loads(content)
+            if isinstance(codes, list):
+                text += f"📝 {len(codes)} code\n\n"
+            else:
+                short = content[:30] + "..." if len(content) > 30 else content
+                text += f"📝 {short}\n\n"
+        except:
+            short = content[:30] + "..." if len(content) > 30 else content
+            text += f"📝 {short}\n\n"
+    
+    # File đầy đủ
+    for order in orders:
+        order_id, product_name, content, price, quantity, created_at = order
+        file_content += f"--- Đơn #{order_id} - {product_name} ---\n"
+        file_content += f"Giá: {price:,}đ\n"
+        file_content += f"Thời gian: {created_at}\n"
+        file_content += f"Code:\n"
+        try:
+            codes = json.loads(content)
+            if isinstance(codes, list):
+                file_content += "\n".join(codes)
+            else:
+                file_content += content
+        except:
+            file_content += content
+        file_content += "\n\n"
+    
+    if len(orders) > 10:
+        text += f"... và {len(orders) - 10} đơn khác"
+    
+    # Gửi file luôn
+    filename = f"sold_codes_user_{user_id}.txt"
+    file_buf = io.BytesIO(file_content.encode('utf-8'))
+    file_buf.seek(0)
+    
+    await update.message.reply_text(text, reply_markup=back_keyboard("admin_sold_codes"))
+    await context.bot.send_document(
+        chat_id=update.message.chat_id,
+        document=file_buf,
+        filename=filename,
+        caption=f"📤 Code đã bán cho User {user_id}"
+    )
+    
+    return ConversationHandler.END

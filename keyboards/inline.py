@@ -11,8 +11,9 @@ def user_reply_keyboard():
 def admin_reply_keyboard():
     keyboard = [
         [KeyboardButton("📦 Quản lý SP"), KeyboardButton("📥 Thêm stock")],
-        [KeyboardButton("📋 Xem stock"), KeyboardButton("💸 Duyệt rút tiền")],
-        [KeyboardButton("🏦 Cài đặt NH"), KeyboardButton("🚪 Thoát Admin")],
+        [KeyboardButton("📋 Xem stock"), KeyboardButton("📜 Code đã bán")],
+        [KeyboardButton("💸 Duyệt rút tiền"), KeyboardButton("🏦 Cài đặt NH")],
+        [KeyboardButton("🚪 Thoát Admin")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -27,13 +28,23 @@ def main_menu_keyboard():
 
 def admin_menu_keyboard():
     keyboard = [
-        [InlineKeyboardButton(" Quản lý sản phẩm", callback_data="admin_products")],
-        [InlineKeyboardButton(" Thêm stock", callback_data="admin_add_stock")],
-        [InlineKeyboardButton(" Xem stock", callback_data="admin_manage_stock")],
-        [InlineKeyboardButton(" Duyệt rút tiền", callback_data="admin_withdraws")],
-        [InlineKeyboardButton(" Cài đặt ngân hàng", callback_data="admin_bank_settings")],
-        [InlineKeyboardButton(" Quay lại", callback_data="back_main")],
+        [InlineKeyboardButton("📦 Quản lý sản phẩm", callback_data="admin_products")],
+        [InlineKeyboardButton("📥 Thêm stock", callback_data="admin_add_stock")],
+        [InlineKeyboardButton("📋 Xem stock", callback_data="admin_manage_stock")],
+        [InlineKeyboardButton("📜 Xem code đã bán", callback_data="admin_sold_codes")],
+        [InlineKeyboardButton("💸 Duyệt rút tiền", callback_data="admin_withdraws")],
+        [InlineKeyboardButton("🏦 Cài đặt ngân hàng", callback_data="admin_bank_settings")],
+        [InlineKeyboardButton("🔙 Quay lại", callback_data="back_main")],
     ]
+    return InlineKeyboardMarkup(keyboard)
+
+def admin_sold_codes_keyboard(products):
+    """Keyboard chọn sản phẩm để xem code đã bán"""
+    keyboard = []
+    for p in products:
+        keyboard.append([InlineKeyboardButton(f"📦 {p['name']}", callback_data=f"admin_soldby_product_{p['id']}")])
+    keyboard.append([InlineKeyboardButton("🔍 Tìm theo User ID", callback_data="admin_soldby_user")])
+    keyboard.append([InlineKeyboardButton("🔙 Quay lại", callback_data="admin")])
     return InlineKeyboardMarkup(keyboard)
 
 def products_keyboard(products):
