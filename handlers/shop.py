@@ -1,19 +1,29 @@
 import random
 import string
 import io
-from telegram import Update, InputFile, KeyboardButton, ReplyKeyboardMarkup
+from telegram import Update, InputFile, KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from database import (
     get_products, get_product, get_balance, update_balance,
-    get_available_stock, mark_stock_sold, create_order,
+    get_available_stock, mark_stock_sold, create_order, create_order_bulk,
     get_user_orders, create_deposit, get_or_create_user,
-    get_bank_settings
+    get_bank_settings, get_available_stock_batch, mark_stock_sold_batch
 )
 from keyboards import (
     products_keyboard, confirm_buy_keyboard,
     back_keyboard, main_menu_keyboard, user_reply_keyboard
 )
 from config import MOMO_PHONE, MOMO_NAME, ADMIN_IDS, SEPAY_ACCOUNT_NUMBER, SEPAY_BANK_NAME, SEPAY_ACCOUNT_NAME
+
+def make_file(items: list, header: str = "") -> io.BytesIO:
+    """Tạo file nhanh từ list items"""
+    if header:
+        content = header + "\n" + "="*40 + "\n\n" + "\n".join(items)
+    else:
+        content = "\n".join(items)
+    buf = io.BytesIO(content.encode('utf-8'))
+    buf.seek(0)
+    return buf
 
 # Bank codes cho VietQR
 BANK_CODES = {
@@ -116,43 +126,53 @@ async def handle_buy_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
     
-    # Mua nhiều sản phẩm
-    purchased_items = []
-    for _ in range(quantity):
-        stock = await get_available_stock(product_id)
-        if not stock:
-            break
-        await mark_stock_sold(stock[0])
-        await create_order(user_id, product_id, stock[1], product['price'])
-        purchased_items.append(stock[1])
+    # Lấy stock batch (1 query thay vì N queries)
+    stocks = await get_available_stock_batch(product_id, quantity)
     
-    if not purchased_items:
+    if not stocks:
         await update.message.reply_text("❌ Sản phẩm đã hết hàng!")
         context.user_data.pop('buying_product_id', None)
         return
+    
+    # Mark sold batch (1 query thay vì N queries)
+    stock_ids = [s[0] for s in stocks]
+    purchased_items = [s[1] for s in stocks]
+    await mark_stock_sold_batch(stock_ids)
+    
+    # Tạo 1 đơn hàng duy nhất cho tất cả items
+    from datetime import datetime
+    order_group = f"ORD{user_id}{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    await create_order_bulk(user_id, product_id, purchased_items, product['price'], order_group)
     
     # Trừ tiền
     actual_total = product['price'] * len(purchased_items)
     await update_balance(user_id, -actual_total)
     new_balance = await get_balance(user_id)
     
-    # Format danh sách sản phẩm
-    items_text = "\n".join([f"<code>{item}</code>" for item in purchased_items])
+    # Tạo file trước (nhanh hơn tạo trong lúc gửi)
+    header = f"Sản phẩm: {product['name']}\nSố lượng: {len(purchased_items)}\nTổng tiền: {actual_total:,}đ"
+    file_buf = make_file(purchased_items, header)
+    filename = f"{product['name']}_{len(purchased_items)}.txt"
     
-    text = f"""
-✅ MUA HÀNG THÀNH CÔNG!
+    # Kiểm tra độ dài - gửi file nếu nhiều items
+    if len(purchased_items) > 10:
+        # Gửi file ngay (nhanh nhất)
+        await update.message.reply_document(
+            document=file_buf,
+            filename=filename,
+            caption=f"✅ Mua thành công {len(purchased_items)} {product['name']}\n💰 {actual_total:,}đ | 💳 Còn {new_balance:,}đ",
+            reply_markup=user_reply_keyboard()
+        )
+    else:
+        # Gửi text bình thường
+        items_formatted = "\n".join([f"<code>{item}</code>" for item in purchased_items])
+        text = f"""✅ MUA HÀNG THÀNH CÔNG!
 
-📦 Sản phẩm: {product['name']}
-🔢 Số lượng: {len(purchased_items)}
-💰 Tổng tiền: {actual_total:,}đ
-💳 Số dư còn lại: {new_balance:,}đ
+📦 {product['name']} x{len(purchased_items)}
+💰 {actual_total:,}đ | 💳 Còn {new_balance:,}đ
 
-📋 Thông tin sản phẩm:
-{items_text}
-
-⚠️ Lưu ý: Hãy lưu lại thông tin trên!
-"""
-    await update.message.reply_text(text, parse_mode="HTML", reply_markup=user_reply_keyboard())
+{items_formatted}"""
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=user_reply_keyboard())
     
     # Clear trạng thái mua
     context.user_data.pop('buying_product_id', None)
@@ -475,42 +495,51 @@ async def confirm_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # Mua nhiều sản phẩm
-    purchased_items = []
-    for _ in range(quantity):
-        stock = await get_available_stock(product_id)
-        if not stock:
-            break
-        await mark_stock_sold(stock[0])
-        await create_order(user_id, product_id, stock[1], product['price'])
-        purchased_items.append(stock[1])
+    # Lấy stock batch (1 query thay vì N queries)
+    stocks = await get_available_stock_batch(product_id, quantity)
     
-    if not purchased_items:
+    if not stocks:
         await query.edit_message_text("❌ Sản phẩm đã hết hàng!", reply_markup=back_keyboard("shop"))
         return
+    
+    # Mark sold batch (1 query thay vì N queries)
+    stock_ids = [s[0] for s in stocks]
+    purchased_items = [s[1] for s in stocks]
+    await mark_stock_sold_batch(stock_ids)
+    
+    # Tạo 1 đơn hàng duy nhất cho tất cả items
+    from datetime import datetime
+    order_group = f"ORD{user_id}{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    await create_order_bulk(user_id, product_id, purchased_items, product['price'], order_group)
     
     # Trừ tiền theo số lượng thực tế mua được
     actual_total = product['price'] * len(purchased_items)
     await update_balance(user_id, -actual_total)
     new_balance = await get_balance(user_id)
     
-    # Format danh sách sản phẩm
-    items_text = "\n".join([f"<code>{item}</code>" for item in purchased_items])
+    # Tạo file trước
+    header = f"Sản phẩm: {product['name']}\nSố lượng: {len(purchased_items)}\nTổng tiền: {actual_total:,}đ"
+    file_buf = make_file(purchased_items, header)
+    filename = f"{product['name']}_{len(purchased_items)}.txt"
     
-    text = f"""
-✅ MUA HÀNG THÀNH CÔNG!
+    # Gửi file nếu nhiều items
+    if len(purchased_items) > 10:
+        await context.bot.send_document(
+            chat_id=query.message.chat_id,
+            document=file_buf,
+            filename=filename,
+            caption=f"✅ Mua thành công {len(purchased_items)} {product['name']}\n💰 {actual_total:,}đ | 💳 Còn {new_balance:,}đ"
+        )
+    else:
+        # Gửi text bình thường
+        items_formatted = "\n".join([f"<code>{item}</code>" for item in purchased_items])
+        text = f"""✅ MUA HÀNG THÀNH CÔNG!
 
-📦 Sản phẩm: {product['name']}
-🔢 Số lượng: {len(purchased_items)}
-💰 Tổng tiền: {actual_total:,}đ
-💳 Số dư còn lại: {new_balance:,}đ
+📦 {product['name']} x{len(purchased_items)}
+💰 {actual_total:,}đ | 💳 Còn {new_balance:,}đ
 
-📋 Thông tin sản phẩm:
-{items_text}
-
-⚠️ Lưu ý: Hãy lưu lại thông tin trên!
-"""
-    await query.edit_message_text(text, parse_mode="HTML", reply_markup=back_keyboard())
+{items_formatted}"""
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=back_keyboard())
 
 async def show_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -537,12 +566,86 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("📜 Bạn chưa có đơn hàng nào!", reply_markup=back_keyboard())
         return
     
-    text = "📜 LỊCH SỬ MUA HÀNG:\n\n"
-    for order in orders:
-        text += f"#{order[0]} | {order[1]} | {order[3]:,}đ\n"
-        text += f"📋 <code>{order[2]}</code>\n\n"
+    text = "📜 LỊCH SỬ MUA HÀNG\n\nChọn đơn để xem chi tiết:"
+    keyboard = []
     
-    await query.edit_message_text(text, parse_mode="HTML", reply_markup=back_keyboard())
+    # Giới hạn 5 đơn gần nhất
+    for order in orders[:5]:
+        order_id, product_name, content, price, created_at, quantity = order
+        quantity = quantity or 1
+        short_name = product_name[:8] if len(product_name) > 8 else product_name
+        
+        # Rút gọn giá
+        if price >= 1000000:
+            price_str = f"{price//1000000}tr"
+        elif price >= 1000:
+            price_str = f"{price//1000}k"
+        else:
+            price_str = str(price)
+        
+        # Button ngắn gọn
+        keyboard.append([InlineKeyboardButton(f"#{order_id} {short_name} x{quantity} {price_str}", callback_data=f"order_detail_{order_id}")])
+    
+    keyboard.append([InlineKeyboardButton("🔙 Quay lại", callback_data="back_main")])
+    
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def show_order_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xem chi tiết đơn hàng - gửi file nếu nhiều items"""
+    query = update.callback_query
+    
+    order_id = int(query.data.split("_")[2])
+    
+    from database import get_order_detail
+    order = await get_order_detail(order_id)
+    
+    if not order:
+        await query.answer("❌ Không tìm thấy đơn hàng!", show_alert=True)
+        return
+    
+    # order: (id, product_name, content, price, created_at, quantity)
+    _, product_name, content, price, created_at, quantity = order
+    quantity = quantity or 1
+    
+    # Parse content (có thể là JSON array hoặc string đơn)
+    import json
+    try:
+        items = json.loads(content)
+        if not isinstance(items, list):
+            items = [content]
+    except:
+        items = [content]
+    
+    # Nếu ít items -> hiển thị text
+    if len(items) <= 10:
+        await query.answer()
+        items_text = "\n".join([f"<code>{item}</code>" for item in items])
+        text = f"""
+📋 CHI TIẾT ĐƠN HÀNG #{order_id}
+
+📦 Sản phẩm: {product_name}
+🔢 Số lượng: {quantity}
+💰 Tổng tiền: {price:,}đ
+📅 Ngày mua: {created_at[:19] if created_at else ""}
+
+📝 Nội dung:
+{items_text}
+"""
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=back_keyboard("history"))
+    else:
+        # Nhiều items -> gửi file ngay
+        await query.answer()
+        
+        header = f"Đơn hàng: #{order_id}\nSản phẩm: {product_name}\nSố lượng: {quantity}\nTổng tiền: {price:,}đ"
+        file_buf = make_file(items, header)
+        filename = f"Don_{order_id}.txt"
+        
+        await context.bot.send_document(
+            chat_id=query.message.chat_id,
+            document=file_buf,
+            filename=filename,
+            caption=f"📋 Đơn #{order_id} | {product_name} | SL: {quantity}"
+        )
 
 
 # Deposit handlers

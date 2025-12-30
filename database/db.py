@@ -41,6 +41,8 @@ async def init_db():
                 product_id INTEGER,
                 content TEXT,
                 price INTEGER,
+                quantity INTEGER DEFAULT 1,
+                order_group TEXT,
                 created_at TEXT
             )
         """)
@@ -163,9 +165,27 @@ async def get_available_stock(product_id: int):
         )
         return await cursor.fetchone()
 
+async def get_available_stock_batch(product_id: int, quantity: int):
+    """Lấy nhiều stock cùng lúc - tối ưu cho mua số lượng lớn"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT id, content FROM stock WHERE product_id = ? AND sold = 0 LIMIT ?",
+            (product_id, quantity)
+        )
+        return await cursor.fetchall()
+
 async def mark_stock_sold(stock_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE stock SET sold = 1 WHERE id = ?", (stock_id,))
+        await db.commit()
+
+async def mark_stock_sold_batch(stock_ids: list):
+    """Mark nhiều stock sold cùng lúc"""
+    if not stock_ids:
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        placeholders = ",".join("?" * len(stock_ids))
+        await db.execute(f"UPDATE stock SET sold = 1 WHERE id IN ({placeholders})", stock_ids)
         await db.commit()
 
 async def get_stock_by_product(product_id: int):
@@ -198,24 +218,75 @@ async def delete_stock(stock_id: int):
         await db.execute("DELETE FROM stock WHERE id = ?", (stock_id,))
         await db.commit()
 
+async def delete_all_stock(product_id: int, only_unsold: bool = False):
+    """Xóa tất cả stock của sản phẩm"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        if only_unsold:
+            await db.execute("DELETE FROM stock WHERE product_id = ? AND sold = 0", (product_id,))
+        else:
+            await db.execute("DELETE FROM stock WHERE product_id = ?", (product_id,))
+        await db.commit()
+
+async def export_stock(product_id: int, only_unsold: bool = True):
+    """Export stock ra list để tải file"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        if only_unsold:
+            cursor = await db.execute(
+                "SELECT content FROM stock WHERE product_id = ? AND sold = 0 ORDER BY id",
+                (product_id,)
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT content FROM stock WHERE product_id = ? ORDER BY id",
+                (product_id,)
+            )
+        rows = await cursor.fetchall()
+        return [row[0] for row in rows]
+        await db.commit()
+
 # Order functions
+async def create_order_bulk(user_id: int, product_id: int, contents: list, price_per_item: int, order_group: str):
+    """Tạo đơn hàng với nhiều items cùng lúc"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        created_at = datetime.now().isoformat()
+        # Lưu tất cả items vào 1 record với content là JSON
+        import json
+        await db.execute(
+            "INSERT INTO orders (user_id, product_id, content, price, quantity, order_group, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (user_id, product_id, json.dumps(contents), price_per_item * len(contents), len(contents), order_group, created_at)
+        )
+        await db.commit()
+
 async def create_order(user_id: int, product_id: int, content: str, price: int):
+    """Legacy - tạo đơn hàng 1 item"""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT INTO orders (user_id, product_id, content, price, created_at) VALUES (?, ?, ?, ?, ?)",
-            (user_id, product_id, content, price, datetime.now().isoformat())
+            "INSERT INTO orders (user_id, product_id, content, price, quantity, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, product_id, content, price, 1, datetime.now().isoformat())
         )
         await db.commit()
 
 async def get_user_orders(user_id: int):
+    """Lấy lịch sử đơn hàng - gom theo order_group hoặc từng đơn"""
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            """SELECT o.id, p.name, o.content, o.price, o.created_at 
+            """SELECT o.id, p.name, o.content, o.price, o.created_at, o.quantity
                FROM orders o JOIN products p ON o.product_id = p.id 
-               WHERE o.user_id = ? ORDER BY o.created_at DESC LIMIT 10""",
+               WHERE o.user_id = ? ORDER BY o.created_at DESC LIMIT 20""",
             (user_id,)
         )
         return await cursor.fetchall()
+
+async def get_order_detail(order_id: int):
+    """Lấy chi tiết 1 đơn hàng"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """SELECT o.id, p.name, o.content, o.price, o.created_at, o.quantity
+               FROM orders o JOIN products p ON o.product_id = p.id 
+               WHERE o.id = ?""",
+            (order_id,)
+        )
+        return await cursor.fetchone()
 
 # Deposit functions
 async def create_deposit(user_id: int, amount: int, code: str):

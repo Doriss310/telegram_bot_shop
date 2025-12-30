@@ -5,7 +5,8 @@ from database import (
     get_pending_deposits, confirm_deposit, cancel_deposit, get_stats,
     get_pending_withdrawals, confirm_withdrawal, cancel_withdrawal,
     get_bank_settings, set_setting, get_setting, get_all_user_ids,
-    get_stock_by_product, get_stock_detail, update_stock_content, delete_stock, get_product
+    get_stock_by_product, get_stock_detail, update_stock_content, delete_stock, get_product,
+    delete_all_stock, export_stock
 )
 from keyboards import (
     admin_menu_keyboard, admin_products_keyboard, admin_stock_keyboard,
@@ -13,6 +14,7 @@ from keyboards import (
     admin_reply_keyboard, user_reply_keyboard, admin_view_stock_keyboard,
     admin_stock_list_keyboard, admin_stock_detail_keyboard
 )
+import io
 from config import ADMIN_IDS
 
 # States
@@ -115,24 +117,76 @@ async def admin_select_stock_product(update: Update, context: ContextTypes.DEFAU
     context.user_data['stock_product_id'] = product_id
     
     await query.edit_message_text(
-        "📝 Gửi stock (mỗi dòng là 1 sản phẩm):\n\nVí dụ:\nacc1@gmail.com|pass123\nacc2@gmail.com|pass456"
+        "📝 THÊM STOCK\n\n"
+        "Cách 1: Gửi text (mỗi dòng 1 sản phẩm)\n"
+        "Cách 2: Gửi file .txt (hỗ trợ hàng nghìn stock)\n\n"
+        "Ví dụ:\nacc1@gmail.com|pass123\nacc2@gmail.com|pass456"
     )
     return ADD_STOCK_CONTENT
 
 async def admin_add_stock_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xử lý thêm stock từ text hoặc file"""
     product_id = context.user_data.get('stock_product_id')
     if not product_id:
         await update.message.reply_text("❌ Lỗi! Vui lòng thử lại.")
         return ConversationHandler.END
     
-    lines = update.message.text.strip().split("\n")
-    contents = [line.strip() for line in lines if line.strip()]
+    contents = []
     
-    if contents:
-        await add_stock_bulk(product_id, contents)
+    # Xử lý file upload
+    if update.message.document:
+        doc = update.message.document
+        
+        # Kiểm tra file type
+        if not doc.file_name.endswith('.txt'):
+            await update.message.reply_text("❌ Chỉ hỗ trợ file .txt!")
+            return ADD_STOCK_CONTENT
+        
+        # Giới hạn 10MB
+        if doc.file_size > 10 * 1024 * 1024:
+            await update.message.reply_text("❌ File quá lớn! Tối đa 10MB.")
+            return ADD_STOCK_CONTENT
+        
+        await update.message.reply_text("⏳ Đang xử lý file...")
+        
+        try:
+            file = await doc.get_file()
+            file_bytes = await file.download_as_bytearray()
+            
+            # Decode với nhiều encoding
+            text_content = None
+            for encoding in ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']:
+                try:
+                    text_content = file_bytes.decode(encoding)
+                    break
+                except:
+                    continue
+            
+            if not text_content:
+                await update.message.reply_text("❌ Không đọc được file! Hãy dùng encoding UTF-8.")
+                return ADD_STOCK_CONTENT
+            
+            lines = text_content.strip().split("\n")
+            contents = [line.strip() for line in lines if line.strip()]
+            
+        except Exception as e:
+            await update.message.reply_text(f"❌ Lỗi đọc file: {str(e)}")
+            return ADD_STOCK_CONTENT
+    
+    # Xử lý text thường
+    elif update.message.text:
+        lines = update.message.text.strip().split("\n")
+        contents = [line.strip() for line in lines if line.strip()]
+    
+    if not contents:
+        await update.message.reply_text("❌ Không có dữ liệu! Gửi lại text hoặc file .txt")
+        return ADD_STOCK_CONTENT
+    
+    # Thêm stock vào database
+    await add_stock_bulk(product_id, contents)
     
     await update.message.reply_text(
-        f"✅ Đã thêm {len(contents)} stock!",
+        f"✅ Đã thêm {len(contents):,} stock!",
         reply_markup=back_keyboard("admin_add_stock")
     )
     return ConversationHandler.END
@@ -537,9 +591,13 @@ async def admin_view_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stocks = await get_stock_by_product(product_id)
     
     if not stocks:
+        keyboard = [
+            [InlineKeyboardButton("📥 Thêm stock", callback_data=f"admin_stock_{product_id}")],
+            [InlineKeyboardButton("🔙 Quay lại", callback_data="admin_manage_stock")],
+        ]
         await query.edit_message_text(
             f"📦 {product['name']}\n\n❌ Chưa có stock nào!",
-            reply_markup=back_keyboard("admin_manage_stock")
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
     
@@ -547,8 +605,84 @@ async def admin_view_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sold = sum(1 for s in stocks if s[2])
     available = total - sold
     
-    text = f"📦 {product['name']}\n\n📊 Tổng: {total} | 🟢 Còn: {available} | 🔴 Đã bán: {sold}\n\nChọn stock để xem chi tiết:"
-    await query.edit_message_text(text, reply_markup=admin_stock_list_keyboard(stocks, product_id))
+    text = f"📦 {product['name']}\n\n📊 Tổng: {total} | 🟢 Còn: {available} | 🔴 Đã bán: {sold}"
+    
+    # Thêm các nút quản lý nhanh
+    keyboard = [
+        [InlineKeyboardButton("📤 Export stock còn", callback_data=f"admin_export_{product_id}")],
+        [InlineKeyboardButton("🗑 Xóa stock còn", callback_data=f"admin_clearunsold_{product_id}"),
+         InlineKeyboardButton("🗑 Xóa TẤT CẢ", callback_data=f"admin_clearall_{product_id}")],
+        [InlineKeyboardButton("📥 Thêm stock mới", callback_data=f"admin_stock_{product_id}")],
+        [InlineKeyboardButton("🔙 Quay lại", callback_data="admin_manage_stock")],
+    ]
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def admin_export_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Export stock còn lại ra file .txt"""
+    query = update.callback_query
+    await query.answer("Đang export...")
+    
+    product_id = int(query.data.split("_")[2])
+    product = await get_product(product_id)
+    stocks = await export_stock(product_id, only_unsold=True)
+    
+    if not stocks:
+        await query.edit_message_text(
+            f"📦 {product['name']}\n\n❌ Không có stock nào còn lại!",
+            reply_markup=back_keyboard(f"admin_viewstock_{product_id}")
+        )
+        return
+    
+    # Tạo file nhanh
+    filename = f"{product['name']}_stock.txt"
+    content = "\n".join(stocks)
+    file_buf = io.BytesIO(content.encode('utf-8'))
+    file_buf.seek(0)
+    
+    await context.bot.send_document(
+        chat_id=query.message.chat_id,
+        document=file_buf,
+        filename=filename,
+        caption=f"📤 {len(stocks)} stock của {product['name']}"
+    )
+
+async def admin_clear_unsold_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xóa tất cả stock chưa bán"""
+    query = update.callback_query
+    await query.answer()
+    
+    product_id = int(query.data.split("_")[2])
+    product = await get_product(product_id)
+    
+    # Đếm trước khi xóa
+    stocks = await get_stock_by_product(product_id)
+    unsold = sum(1 for s in stocks if not s[2])
+    
+    await delete_all_stock(product_id, only_unsold=True)
+    
+    await query.edit_message_text(
+        f"✅ Đã xóa {unsold} stock chưa bán của {product['name']}!",
+        reply_markup=back_keyboard(f"admin_viewstock_{product_id}")
+    )
+
+async def admin_clear_all_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xóa TẤT CẢ stock (cả đã bán)"""
+    query = update.callback_query
+    await query.answer()
+    
+    product_id = int(query.data.split("_")[2])
+    product = await get_product(product_id)
+    
+    # Đếm trước khi xóa
+    stocks = await get_stock_by_product(product_id)
+    total = len(stocks)
+    
+    await delete_all_stock(product_id, only_unsold=False)
+    
+    await query.edit_message_text(
+        f"✅ Đã xóa TẤT CẢ {total} stock của {product['name']}!",
+        reply_markup=back_keyboard(f"admin_viewstock_{product_id}")
+    )
 
 async def admin_stock_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Chuyển trang danh sách stock"""

@@ -14,7 +14,7 @@ from handlers.shop import (
     show_history, show_deposit, process_deposit, handle_deposit_text,
     handle_shop_text, handle_withdraw_text, process_deposit_amount,
     process_withdraw_amount, process_withdraw_bank, process_withdraw_account,
-    handle_buy_quantity,
+    handle_buy_quantity, show_order_detail,
     WAITING_DEPOSIT_AMOUNT, WAITING_WITHDRAW_AMOUNT, WAITING_WITHDRAW_BANK, WAITING_WITHDRAW_ACCOUNT
 )
 from handlers.admin import (
@@ -32,7 +32,8 @@ from handlers.admin import (
     handle_admin_products_text, handle_admin_stock_text, handle_admin_withdrawals_text,
     handle_admin_bank_text, handle_exit_admin, notification_command, notification_send,
     admin_manage_stock, admin_view_stock, admin_stock_page, admin_stock_detail,
-    admin_edit_stock_start, admin_edit_stock_done, admin_delete_stock, handle_admin_manage_stock_text
+    admin_edit_stock_start, admin_edit_stock_done, admin_delete_stock, handle_admin_manage_stock_text,
+    admin_export_stock, admin_clear_unsold_stock, admin_clear_all_stock
 )
 from sepay_checker import run_checker, init_checker_db
 
@@ -75,11 +76,11 @@ def setup_bot():
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
     
-    # Add stock conversation
+    # Add stock conversation (hỗ trợ cả text và file .txt)
     add_stock_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_select_stock_product, pattern="^admin_stock_\\d+$")],
         states={
-            ADD_STOCK_CONTENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_add_stock_content)],
+            ADD_STOCK_CONTENT: [MessageHandler((filters.TEXT | filters.Document.TXT) & ~filters.COMMAND, admin_add_stock_content)],
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
@@ -182,6 +183,7 @@ def setup_bot():
     app.add_handler(CallbackQueryHandler(show_product, pattern="^buy_\\d+$"))
     app.add_handler(CallbackQueryHandler(show_account, pattern="^account$"))
     app.add_handler(CallbackQueryHandler(show_history, pattern="^history$"))
+    app.add_handler(CallbackQueryHandler(show_order_detail, pattern="^order_detail_\\d+$"))
     app.add_handler(CallbackQueryHandler(show_deposit, pattern="^deposit$"))
     app.add_handler(CallbackQueryHandler(process_deposit, pattern="^deposit_\\d+$"))
     
@@ -206,6 +208,9 @@ def setup_bot():
     app.add_handler(CallbackQueryHandler(admin_stock_page, pattern="^admin_stockpage_\\d+_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_stock_detail, pattern="^admin_stockdetail_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_delete_stock, pattern="^admin_delstock_\\d+_\\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_export_stock, pattern="^admin_export_\\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_clear_unsold_stock, pattern="^admin_clearunsold_\\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_clear_all_stock, pattern="^admin_clearall_\\d+$"))
     
     return app
 

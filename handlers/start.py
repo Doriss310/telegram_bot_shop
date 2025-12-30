@@ -1,4 +1,4 @@
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from database import get_or_create_user, get_balance, get_products, get_user_orders
 from keyboards import user_reply_keyboard, products_keyboard
@@ -29,12 +29,28 @@ async def handle_history_text(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("📜 Bạn chưa có đơn hàng nào!")
         return
     
-    text = "📜 LỊCH SỬ MUA HÀNG:\n\n"
-    for order in orders:
-        text += f"#{order[0]} | {order[1]} | {order[3]:,}đ\n"
-        text += f"📋 <code>{order[2]}</code>\n\n"
+    text = "📜 LỊCH SỬ MUA HÀNG\n\nChọn đơn để xem chi tiết:"
+    keyboard = []
     
-    await update.message.reply_text(text, parse_mode="HTML")
+    # Giới hạn 5 đơn gần nhất
+    for order in orders[:5]:
+        order_id, product_name, content, price, created_at, quantity = order
+        quantity = quantity or 1
+        short_name = product_name[:8] if len(product_name) > 8 else product_name
+        
+        # Rút gọn giá
+        if price >= 1000000:
+            price_str = f"{price//1000000}tr"
+        elif price >= 1000:
+            price_str = f"{price//1000}k"
+        else:
+            price_str = str(price)
+        
+        keyboard.append([InlineKeyboardButton(f"#{order_id} {short_name} x{quantity} {price_str}", callback_data=f"order_detail_{order_id}")])
+    
+    keyboard.append([InlineKeyboardButton("🔙 Quay lại", callback_data="back_main")])
+    
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Xử lý khi user bấm nút User ID từ reply keyboard"""
