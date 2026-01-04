@@ -267,24 +267,74 @@ user3@email.com|password3
 
 ## 🐳 Deploy với Docker (Khuyên dùng)
 
-### Yêu cầu
-- Docker
-- Docker Compose
+Docker giúp chạy bot dễ dàng trên bất kỳ máy nào mà không cần cài Python.
 
-### Chạy với Docker Compose
+### Bước 1: Cài Docker
+
+**Windows:**
+1. Tải Docker Desktop: https://www.docker.com/products/docker-desktop
+2. Cài đặt và khởi động lại máy
+3. Mở Docker Desktop và đợi nó chạy (icon cá voi xanh ở taskbar)
+
+**Mac:**
+1. Tải Docker Desktop: https://www.docker.com/products/docker-desktop
+2. Kéo vào Applications và mở
+
+**Linux (Ubuntu/Debian):**
+```bash
+sudo apt update
+sudo apt install docker.io docker-compose -y
+sudo systemctl start docker
+sudo systemctl enable docker
+sudo usermod -aG docker $USER
+# Logout và login lại
+```
+
+### Bước 2: Chuẩn bị source code
+
+1. Copy toàn bộ thư mục bot vào máy mới
+2. Mở Terminal/CMD tại thư mục đó
+3. Tạo file `.env` và điền thông tin (xem Bước 5)
+
+### Bước 3: Chạy Bot
 
 ```bash
-# Build và chạy
+# Build và chạy (lần đầu)
 docker-compose up -d --build
 
 # Xem logs
 docker-compose logs -f
 
-# Dừng
+# Dừng bot
+docker-compose stop
+
+# Khởi động lại
+docker-compose start
+
+# Xóa hoàn toàn
 docker-compose down
 ```
 
-### Chạy với Docker thuần
+### Bước 4: Tự động chạy khi bật máy (Tùy chọn)
+
+**Windows:**
+- Mở Docker Desktop → Settings → General
+- Bật "Start Docker Desktop when you log in"
+- Bot sẽ tự chạy vì đã có `restart: always` trong config
+
+**Linux:**
+```bash
+sudo systemctl enable docker
+```
+
+### Lưu ý quan trọng
+
+- ✅ **Data không mất** khi tắt máy (lưu trong thư mục `data/`)
+- ✅ **Không cần cài Python** - Docker đã bao gồm tất cả
+- ⚠️ Mỗi lần bật máy, đợi Docker khởi động xong (1-2 phút)
+- ⚠️ Nếu bot không tự chạy, gõ `docker-compose up -d`
+
+### Chạy với Docker thuần (Nâng cao)
 
 ```bash
 # Build image
@@ -350,6 +400,45 @@ mv data/shop.db data/shop.db.backup
 # Restart bot (sẽ tạo database mới)
 python run.py
 ```
+
+---
+
+## �️H Chạy trên máy mới (Tóm tắt nhanh)
+
+### Cách 1: Dùng Docker (Đơn giản nhất)
+
+1. Cài Docker Desktop (Windows/Mac) hoặc `docker.io` (Linux)
+2. Copy thư mục bot vào máy mới
+3. Tạo file `.env` với nội dung:
+   ```env
+   BOT_TOKEN=your_bot_token
+   ADMIN_IDS=your_telegram_id
+   ```
+4. Mở Terminal tại thư mục bot, chạy:
+   ```bash
+   docker-compose up -d --build
+   ```
+5. Done! Bot đang chạy.
+
+### Cách 2: Chạy trực tiếp Python
+
+1. Cài Python 3.10+ từ https://python.org
+2. Copy thư mục bot vào máy mới
+3. Mở Terminal tại thư mục bot:
+   ```bash
+   pip install -r requirements.txt
+   ```
+4. Tạo file `.env` (như trên)
+5. Chạy:
+   ```bash
+   python run.py
+   ```
+
+### Checklist trước khi chạy
+
+- [ ] Đã có file `.env` với `BOT_TOKEN` và `ADMIN_IDS`
+- [ ] Thư mục `data/` tồn tại (hoặc sẽ được tạo tự động)
+- [ ] Docker đang chạy (nếu dùng Docker)
 
 ---
 
