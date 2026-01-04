@@ -14,17 +14,35 @@ async def init_db():
                 user_id INTEGER PRIMARY KEY,
                 username TEXT,
                 balance INTEGER DEFAULT 0,
+                balance_usdt REAL DEFAULT 0,
+                language TEXT DEFAULT 'vi',
                 created_at TEXT
             )
         """)
+        # Add balance_usdt column if not exists (migration)
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN balance_usdt REAL DEFAULT 0")
+        except:
+            pass
+        # Add language column if not exists (migration)
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'vi'")
+        except:
+            pass
         await db.execute("""
             CREATE TABLE IF NOT EXISTS products (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 price INTEGER NOT NULL,
+                price_usdt REAL DEFAULT 0,
                 description TEXT
             )
         """)
+        # Add price_usdt column if not exists (migration)
+        try:
+            await db.execute("ALTER TABLE products ADD COLUMN price_usdt REAL DEFAULT 0")
+        except:
+            pass
         await db.execute("""
             CREATE TABLE IF NOT EXISTS stock (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,21 +90,57 @@ async def init_db():
                 value TEXT
             )
         """)
+        # Binance deposits table
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS binance_deposits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                usdt_amount REAL,
+                vnd_amount INTEGER,
+                code TEXT,
+                screenshot_file_id TEXT,
+                status TEXT DEFAULT 'pending',
+                created_at TEXT
+            )
+        """)
+        # USDT withdrawals table
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS usdt_withdrawals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                usdt_amount REAL,
+                wallet_address TEXT,
+                network TEXT DEFAULT 'TRC20',
+                status TEXT DEFAULT 'pending',
+                created_at TEXT
+            )
+        """)
         await db.commit()
 
 # User functions
 async def get_or_create_user(user_id: int, username: str = None):
     async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        cursor = await db.execute("SELECT user_id, username, balance, balance_usdt, language FROM users WHERE user_id = ?", (user_id,))
         user = await cursor.fetchone()
         if not user:
             await db.execute(
-                "INSERT INTO users (user_id, username, created_at) VALUES (?, ?, ?)",
+                "INSERT INTO users (user_id, username, language, created_at) VALUES (?, ?, NULL, ?)",
                 (user_id, username, datetime.now().isoformat())
             )
             await db.commit()
-            return {"user_id": user_id, "username": username, "balance": 0}
-        return {"user_id": user[0], "username": user[1], "balance": user[2]}
+            return {"user_id": user_id, "username": username, "balance": 0, "balance_usdt": 0, "language": None}
+        return {"user_id": user[0], "username": user[1], "balance": user[2], "balance_usdt": user[3] or 0, "language": user[4]}
+
+async def get_user_language(user_id: int) -> str:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
+        row = await cursor.fetchone()
+        return row[0] if row and row[0] else "vi"
+
+async def set_user_language(user_id: int, language: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE users SET language = ? WHERE user_id = ?", (language, user_id))
+        await db.commit()
 
 async def get_balance(user_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -94,16 +148,27 @@ async def get_balance(user_id: int):
         row = await cursor.fetchone()
         return row[0] if row else 0
 
+async def get_balance_usdt(user_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT balance_usdt FROM users WHERE user_id = ?", (user_id,))
+        row = await cursor.fetchone()
+        return row[0] if row and row[0] else 0
+
 async def update_balance(user_id: int, amount: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+        await db.commit()
+
+async def update_balance_usdt(user_id: int, amount: float):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE users SET balance_usdt = balance_usdt + ? WHERE user_id = ?", (amount, user_id))
         await db.commit()
 
 
 # Product functions
 async def get_products():
     async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute("SELECT * FROM products")
+        cursor = await db.execute("SELECT id, name, price, description, price_usdt FROM products")
         rows = await cursor.fetchall()
         products = []
         for row in rows:
@@ -113,30 +178,35 @@ async def get_products():
             stock_count = (await stock_cursor.fetchone())[0]
             products.append({
                 "id": row[0], "name": row[1], "price": row[2],
-                "description": row[3], "stock": stock_count
+                "description": row[3], "stock": stock_count, "price_usdt": row[4] or 0
             })
         return products
 
 async def get_product(product_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute("SELECT * FROM products WHERE id = ?", (product_id,))
+        cursor = await db.execute("SELECT id, name, price, description, price_usdt FROM products WHERE id = ?", (product_id,))
         row = await cursor.fetchone()
         if row:
             stock_cursor = await db.execute(
                 "SELECT COUNT(*) FROM stock WHERE product_id = ? AND sold = 0", (row[0],)
             )
             stock_count = (await stock_cursor.fetchone())[0]
-            return {"id": row[0], "name": row[1], "price": row[2], "description": row[3], "stock": stock_count}
+            return {"id": row[0], "name": row[1], "price": row[2], "description": row[3], "stock": stock_count, "price_usdt": row[4] or 0}
         return None
 
-async def add_product(name: str, price: int, description: str = ""):
+async def add_product(name: str, price: int, description: str = "", price_usdt: float = 0):
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "INSERT INTO products (name, price, description) VALUES (?, ?, ?)",
-            (name, price, description)
+            "INSERT INTO products (name, price, description, price_usdt) VALUES (?, ?, ?, ?)",
+            (name, price, description, price_usdt)
         )
         await db.commit()
         return cursor.lastrowid
+
+async def update_product_price_usdt(product_id: int, price_usdt: float):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE products SET price_usdt = ? WHERE id = ?", (price_usdt, product_id))
+        await db.commit()
 
 async def delete_product(product_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -459,3 +529,126 @@ async def get_bank_settings():
         "account_name": await get_setting("account_name", ""),
         "sepay_token": await get_setting("sepay_token", ""),
     }
+
+# Binance deposit functions
+async def create_binance_deposit(user_id: int, usdt_amount: float, vnd_amount: int, code: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO binance_deposits (user_id, usdt_amount, vnd_amount, code, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user_id, usdt_amount, vnd_amount, code, datetime.now().isoformat())
+        )
+        await db.commit()
+
+async def update_binance_deposit_screenshot(user_id: int, code: str, file_id: str):
+    """Cập nhật screenshot cho deposit"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE binance_deposits SET screenshot_file_id = ? WHERE user_id = ? AND code = ? AND status = 'pending'",
+            (file_id, user_id, code)
+        )
+        await db.commit()
+
+async def get_pending_binance_deposits():
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT id, user_id, usdt_amount, vnd_amount, code, screenshot_file_id, created_at FROM binance_deposits WHERE status = 'pending' AND screenshot_file_id IS NOT NULL"
+        )
+        return await cursor.fetchall()
+
+async def get_binance_deposit_detail(deposit_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT id, user_id, usdt_amount, vnd_amount, code, screenshot_file_id, status, created_at FROM binance_deposits WHERE id = ?",
+            (deposit_id,)
+        )
+        return await cursor.fetchone()
+
+async def confirm_binance_deposit(deposit_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT user_id, usdt_amount FROM binance_deposits WHERE id = ?", (deposit_id,))
+        row = await cursor.fetchone()
+        if row:
+            await db.execute("UPDATE binance_deposits SET status = 'confirmed' WHERE id = ?", (deposit_id,))
+            await db.execute("UPDATE users SET balance_usdt = balance_usdt + ? WHERE user_id = ?", (row[1], row[0]))
+            await db.commit()
+            return row  # (user_id, usdt_amount)
+        return None
+
+async def cancel_binance_deposit(deposit_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE binance_deposits SET status = 'cancelled' WHERE id = ?", (deposit_id,))
+        await db.commit()
+
+async def get_user_pending_binance_deposit(user_id: int):
+    """Lấy deposit binance đang pending của user"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT id, usdt_amount, vnd_amount, code FROM binance_deposits WHERE user_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1",
+            (user_id,)
+        )
+        return await cursor.fetchone()
+
+
+# USDT Withdrawal functions
+async def create_usdt_withdrawal(user_id: int, usdt_amount: float, wallet_address: str, network: str = "TRC20"):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO usdt_withdrawals (user_id, usdt_amount, wallet_address, network, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user_id, usdt_amount, wallet_address, network, datetime.now().isoformat())
+        )
+        await db.commit()
+
+async def get_pending_usdt_withdrawals():
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT id, user_id, usdt_amount, wallet_address, network, created_at FROM usdt_withdrawals WHERE status = 'pending'"
+        )
+        return await cursor.fetchall()
+
+async def get_usdt_withdrawal_detail(withdrawal_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT id, user_id, usdt_amount, wallet_address, network, status, created_at FROM usdt_withdrawals WHERE id = ?",
+            (withdrawal_id,)
+        )
+        return await cursor.fetchone()
+
+async def get_user_pending_usdt_withdrawal(user_id: int):
+    """Kiểm tra user có yêu cầu rút USDT đang pending không"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT SUM(usdt_amount) FROM usdt_withdrawals WHERE user_id = ? AND status = 'pending'",
+            (user_id,)
+        )
+        row = await cursor.fetchone()
+        return row[0] if row and row[0] else 0
+
+async def confirm_usdt_withdrawal(withdrawal_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT user_id, usdt_amount, wallet_address FROM usdt_withdrawals WHERE id = ?", (withdrawal_id,))
+        row = await cursor.fetchone()
+        if row:
+            user_id, usdt_amount, wallet_address = row
+            
+            # Check số dư USDT trước khi trừ
+            cursor = await db.execute("SELECT balance_usdt FROM users WHERE user_id = ?", (user_id,))
+            balance_row = await cursor.fetchone()
+            if not balance_row or (balance_row[0] or 0) < usdt_amount:
+                return None  # Không đủ tiền
+            
+            # Trừ tiền khi admin duyệt
+            await db.execute("UPDATE users SET balance_usdt = balance_usdt - ? WHERE user_id = ? AND balance_usdt >= ?", (usdt_amount, user_id, usdt_amount))
+            await db.execute("UPDATE usdt_withdrawals SET status = 'confirmed' WHERE id = ?", (withdrawal_id,))
+            await db.commit()
+            return row  # (user_id, usdt_amount, wallet_address)
+        return None
+
+async def cancel_usdt_withdrawal(withdrawal_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT user_id, usdt_amount FROM usdt_withdrawals WHERE id = ?", (withdrawal_id,))
+        row = await cursor.fetchone()
+        if row:
+            await db.execute("UPDATE usdt_withdrawals SET status = 'cancelled' WHERE id = ?", (withdrawal_id,))
+            await db.commit()
+            return row
+        return None

@@ -16,3 +16,7 @@ SEPAY_API_TOKEN = os.getenv("SEPAY_API_TOKEN", "")  # Token từ User API
 SEPAY_BANK_NAME = os.getenv("SEPAY_BANK_NAME", "")
 SEPAY_ACCOUNT_NUMBER = os.getenv("SEPAY_ACCOUNT_NUMBER", "")
 SEPAY_ACCOUNT_NAME = os.getenv("SEPAY_ACCOUNT_NAME", "")
+
+# Binance Pay
+BINANCE_PAY_ID = os.getenv("BINANCE_PAY_ID", "")  # Binance ID để nhận tiền
+USDT_RATE = int(os.getenv("USDT_RATE", "25000"))  # Tỷ giá 1 USDT = ? VND

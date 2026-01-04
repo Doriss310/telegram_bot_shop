@@ -19,8 +19,10 @@ from config import ADMIN_IDS
 
 # States
 ADD_PRODUCT_NAME, ADD_PRODUCT_PRICE = range(2)
+ADD_PRODUCT_PRICE_USDT = 3
 ADD_STOCK_CONTENT = 10
 BANK_NAME, ACCOUNT_NUMBER, ACCOUNT_NAME, SEPAY_TOKEN = range(20, 24)
+BINANCE_ID = 24
 NOTIFICATION_MESSAGE = 30
 EDIT_STOCK_CONTENT = 31
 SEARCH_USER_ID = 32
@@ -68,6 +70,27 @@ async def admin_delete_product(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     
     product_id = int(query.data.split("_")[2])
+    product = await get_product(product_id)
+    
+    if not product:
+        await query.edit_message_text("❌ Sản phẩm không tồn tại!", reply_markup=back_keyboard("admin_products"))
+        return
+    
+    # Hiện xác nhận xóa
+    keyboard = [
+        [InlineKeyboardButton("✅ Xác nhận xóa", callback_data=f"admin_confirmdel_{product_id}")],
+        [InlineKeyboardButton("🔙 Hủy", callback_data="admin_products")],
+    ]
+    await query.edit_message_text(
+        f"⚠️ XÁC NHẬN XÓA SẢN PHẨM\n\n📦 {product['name']}\n💰 {product['price']:,}đ\n📊 Stock: {product['stock']}\n\nBạn có chắc muốn xóa?",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def admin_confirm_delete_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    product_id = int(query.data.split("_")[2])
     await delete_product(product_id)
     
     products = await get_products()
@@ -89,16 +112,32 @@ async def admin_add_product_name(update: Update, context: ContextTypes.DEFAULT_T
 async def admin_add_product_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         price = int(update.message.text.replace(",", "").replace(".", ""))
-        name = context.user_data['new_product_name']
-        
-        await add_product(name, price)
-        await update.message.reply_text(
-            f"✅ Đã thêm sản phẩm:\n📦 {name}\n💰 {price:,}đ",
-            reply_markup=back_keyboard("admin_products")
-        )
+        context.user_data['new_product_price'] = price
+        await update.message.reply_text("💵 Nhập giá USDT (hoặc 0 nếu không bán bằng USDT):")
+        return ADD_PRODUCT_PRICE_USDT
     except ValueError:
         await update.message.reply_text("❌ Giá không hợp lệ! Vui lòng nhập số:")
         return ADD_PRODUCT_PRICE
+
+async def admin_add_product_price_usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        price_usdt = float(update.message.text.replace(",", "."))
+        name = context.user_data['new_product_name']
+        price = context.user_data['new_product_price']
+        
+        await add_product(name, price, "", price_usdt)
+        
+        price_text = f"💰 {price:,}đ"
+        if price_usdt > 0:
+            price_text += f" | 💵 {price_usdt} USDT"
+        
+        await update.message.reply_text(
+            f"✅ Đã thêm sản phẩm:\n📦 {name}\n{price_text}",
+            reply_markup=back_keyboard("admin_products")
+        )
+    except ValueError:
+        await update.message.reply_text("❌ Giá không hợp lệ! Vui lòng nhập số (VD: 0 hoặc 1.5):")
+        return ADD_PRODUCT_PRICE_USDT
     
     return ConversationHandler.END
 
@@ -502,24 +541,64 @@ async def handle_admin_withdrawals_text(update: Update, context: ContextTypes.DE
         text += f"#{w[0]} | User: {w[1]} | {w[2]:,}đ | SĐT: {w[3]}\n"
     await update.message.reply_text(text, reply_markup=pending_withdrawals_keyboard(withdrawals))
 
+async def handle_admin_transactions_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler gộp: Duyệt rút tiền VNĐ + Duyệt nạp Binance"""
+    if not is_admin(update.effective_user.id):
+        return
+    
+    withdrawals = await get_pending_withdrawals()
+    from database import get_pending_binance_deposits
+    binance_deposits = await get_pending_binance_deposits()
+    
+    if not withdrawals and not binance_deposits:
+        await update.message.reply_text(
+            "✅ Không có giao dịch nào đang chờ duyệt.",
+            reply_markup=back_keyboard("admin")
+        )
+        return
+    
+    text = "✅ DUYỆT GIAO DỊCH\n\n"
+    
+    keyboard = []
+    
+    if withdrawals:
+        text += f"💸 Rút tiền VNĐ: {len(withdrawals)} yêu cầu\n"
+        keyboard.append([InlineKeyboardButton(f"💸 Rút VNĐ ({len(withdrawals)})", callback_data="admin_withdraws")])
+    
+    if binance_deposits:
+        text += f"🔶 Nạp USDT: {len(binance_deposits)} yêu cầu\n"
+        keyboard.append([InlineKeyboardButton(f"🔶 Nạp USDT ({len(binance_deposits)})", callback_data="admin_binance")])
+    
+    keyboard.append([InlineKeyboardButton("🔙 Quay lại", callback_data="admin")])
+    
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
 async def handle_admin_bank_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     settings = await get_bank_settings()
+    binance_id = await get_setting("binance_pay_id", "")
+    admin_contact = await get_setting("admin_contact", "")
+    
     text = f"""
-🏦 CÀI ĐẶT NGÂN HÀNG
+🏦 CÀI ĐẶT THANH TOÁN
 
-📌 Thông tin hiện tại:
+👤 Admin liên hệ: {('@' + admin_contact) if admin_contact else 'Chưa cài đặt'}
+
+📌 Ngân hàng (VNĐ):
 • Ngân hàng: {settings['bank_name'] or 'Chưa cài đặt'}
 • Số TK: {settings['account_number'] or 'Chưa cài đặt'}
 • Tên TK: {settings['account_name'] or 'Chưa cài đặt'}
 • SePay Token: {'✅ Đã cài' if settings['sepay_token'] else '❌ Chưa cài'}
 
-📎 Lấy token tại: https://my.sepay.vn/companyapi
+🔶 Binance (USDT):
+• Binance ID: {binance_id or 'Chưa cài đặt'}
 """
     keyboard = [
-        [InlineKeyboardButton("🔑 Cài đặt SePay Token", callback_data="set_sepay_token")],
-        [InlineKeyboardButton("🔄 Cập nhật từ SePay", callback_data="refresh_bank_info")],
+        [InlineKeyboardButton("👤 Admin liên hệ", callback_data="set_admin_contact")],
+        [InlineKeyboardButton("🔑 SePay Token", callback_data="set_sepay_token"),
+         InlineKeyboardButton("🔄 Cập nhật SePay", callback_data="refresh_bank_info")],
+        [InlineKeyboardButton("🔶 Binance ID", callback_data="set_binance_id")],
     ]
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -799,26 +878,35 @@ async def admin_delete_stock(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.edit_message_text(text, reply_markup=admin_stock_list_keyboard(stocks, product_id))
 
 # Bank settings
+ADMIN_CONTACT = 25  # State for admin contact setting
+
 async def admin_bank_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
     settings = await get_bank_settings()
+    binance_id = await get_setting("binance_pay_id", "")
+    admin_contact = await get_setting("admin_contact", "")
     
     text = f"""
-🏦 CÀI ĐẶT NGÂN HÀNG
+🏦 CÀI ĐẶT THANH TOÁN
 
-📌 Thông tin hiện tại:
+👤 Admin liên hệ: {('@' + admin_contact) if admin_contact else 'Chưa cài đặt'}
+
+📌 Ngân hàng (VNĐ):
 • Ngân hàng: {settings['bank_name'] or 'Chưa cài đặt'}
 • Số TK: {settings['account_number'] or 'Chưa cài đặt'}
 • Tên TK: {settings['account_name'] or 'Chưa cài đặt'}
 • SePay Token: {'✅ Đã cài' if settings['sepay_token'] else '❌ Chưa cài'}
 
-📎 Lấy token tại: https://my.sepay.vn/companyapi
+🔶 Binance (USDT):
+• Binance ID: {binance_id or 'Chưa cài đặt'}
 """
     keyboard = [
-        [InlineKeyboardButton("🔑 Cài đặt SePay Token", callback_data="set_sepay_token")],
-        [InlineKeyboardButton("🔄 Cập nhật từ SePay", callback_data="refresh_bank_info")],
+        [InlineKeyboardButton("👤 Admin liên hệ", callback_data="set_admin_contact")],
+        [InlineKeyboardButton("🔑 SePay Token", callback_data="set_sepay_token"),
+         InlineKeyboardButton("🔄 Cập nhật SePay", callback_data="refresh_bank_info")],
+        [InlineKeyboardButton("🔶 Binance ID", callback_data="set_binance_id")],
         [InlineKeyboardButton("🔙 Quay lại", callback_data="admin")],
     ]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
@@ -1015,6 +1103,42 @@ async def set_sepay_token_done(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_markup=back_keyboard("admin_bank_settings")
         )
         return ConversationHandler.END
+
+async def set_binance_id_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "🔶 Nhập Binance ID (Pay ID):\n\n"
+        "Lấy ID: Mở app Binance → Profile → Binance ID (dãy số 9 chữ số)"
+    )
+    return BINANCE_ID
+
+async def set_binance_id_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    binance_id = update.message.text.strip()
+    await set_setting("binance_pay_id", binance_id)
+    await update.message.reply_text(
+        f"✅ Đã cập nhật Binance ID: {binance_id}",
+        reply_markup=back_keyboard("admin_bank_settings")
+    )
+    return ConversationHandler.END
+
+async def set_admin_contact_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "👤 Nhập username Telegram của admin (không có @):\n\n"
+        "Ví dụ: phuongdev hoặc admin_shop"
+    )
+    return ADMIN_CONTACT
+
+async def set_admin_contact_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin_contact = update.message.text.strip().replace("@", "")
+    await set_setting("admin_contact", admin_contact)
+    await update.message.reply_text(
+        f"✅ Đã cập nhật Admin liên hệ: @{admin_contact}",
+        reply_markup=back_keyboard("admin_bank_settings")
+    )
+    return ConversationHandler.END
 
 
 # ============ XEM CODE ĐÃ BÁN ============
@@ -1216,3 +1340,383 @@ async def admin_sold_by_user_search(update: Update, context: ContextTypes.DEFAUL
     )
     
     return ConversationHandler.END
+
+
+# ============ BINANCE DEPOSITS ============
+
+async def handle_admin_binance_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler cho nút text Duyệt Binance"""
+    if not is_admin(update.effective_user.id):
+        return
+    
+    from database import get_pending_binance_deposits
+    deposits = await get_pending_binance_deposits()
+    
+    if not deposits:
+        await update.message.reply_text(
+            "🔶 Không có yêu cầu nạp Binance nào đang chờ duyệt.",
+            reply_markup=back_keyboard("admin")
+        )
+        return
+    
+    text = f"🔶 DUYỆT NẠP BINANCE\n\n📋 {len(deposits)} yêu cầu đang chờ:\n"
+    
+    from keyboards import pending_binance_deposits_keyboard
+    await update.message.reply_text(text, reply_markup=pending_binance_deposits_keyboard(deposits))
+
+async def admin_binance_deposits(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Callback handler cho menu duyệt Binance"""
+    query = update.callback_query
+    await query.answer()
+    
+    from database import get_pending_binance_deposits
+    deposits = await get_pending_binance_deposits()
+    
+    if not deposits:
+        await query.edit_message_text(
+            "🔶 Không có yêu cầu nạp Binance nào đang chờ duyệt.",
+            reply_markup=back_keyboard("admin")
+        )
+        return
+    
+    text = f"🔶 DUYỆT NẠP BINANCE\n\n📋 {len(deposits)} yêu cầu đang chờ:\n"
+    
+    from keyboards import pending_binance_deposits_keyboard
+    await query.edit_message_text(text, reply_markup=pending_binance_deposits_keyboard(deposits))
+
+async def admin_view_binance_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xem chi tiết yêu cầu nạp Binance + screenshot"""
+    query = update.callback_query
+    await query.answer()
+    
+    deposit_id = int(query.data.split("_")[2])
+    
+    from database import get_binance_deposit_detail
+    deposit = await get_binance_deposit_detail(deposit_id)
+    
+    if not deposit:
+        await query.edit_message_text("❌ Không tìm thấy yêu cầu!", reply_markup=back_keyboard("admin_binance"))
+        return
+    
+    d_id, user_id, usdt_amount, vnd_amount, code, screenshot_file_id, status, created_at = deposit
+    
+    text = f"""
+🔶 CHI TIẾT NẠP BINANCE #{d_id}
+
+👤 User ID: {user_id}
+💵 Số tiền: {usdt_amount} USDT
+💰 Quy đổi: {vnd_amount:,}đ
+📝 Code: {code}
+📅 Thời gian: {created_at[:19]}
+"""
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Duyệt - Cộng tiền", callback_data=f"admin_confirmbn_{d_id}")],
+        [InlineKeyboardButton("❌ Từ chối", callback_data=f"admin_cancelbn_{d_id}")],
+        [InlineKeyboardButton("🔙 Quay lại", callback_data="admin_binance")],
+    ]
+    
+    # Xóa message cũ và gửi ảnh screenshot
+    try:
+        await query.message.delete()
+        if screenshot_file_id:
+            await context.bot.send_photo(
+                chat_id=query.message.chat_id,
+                photo=screenshot_file_id,
+                caption=text,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=text + "\n⚠️ Không có screenshot!",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+    except Exception as e:
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+async def admin_confirm_binance_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Duyệt nạp Binance - cộng USDT cho user"""
+    query = update.callback_query
+    await query.answer()
+    
+    deposit_id = int(query.data.split("_")[2])
+    
+    from database import confirm_binance_deposit, get_pending_binance_deposits, get_user_language
+    from locales import get_text
+    result = await confirm_binance_deposit(deposit_id)
+    
+    if result:
+        user_id, usdt_amount = result
+        user_lang = await get_user_language(user_id)
+        # Thông báo cho user theo ngôn ngữ của họ
+        try:
+            await context.bot.send_message(
+                user_id,
+                get_text(user_lang, "binance_success").format(amount=usdt_amount)
+            )
+        except:
+            pass
+        
+        text = f"✅ Đã duyệt! Cộng {usdt_amount} USDT cho user {user_id}"
+    else:
+        text = "❌ Không thể duyệt!"
+    
+    try:
+        await query.message.delete()
+    except:
+        pass
+    
+    deposits = await get_pending_binance_deposits()
+    
+    if not deposits:
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=text + "\n\n🔶 Không còn yêu cầu nào.",
+            reply_markup=back_keyboard("admin")
+        )
+    else:
+        from keyboards import pending_binance_deposits_keyboard
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=text + f"\n\n🔶 Còn {len(deposits)} yêu cầu:",
+            reply_markup=pending_binance_deposits_keyboard(deposits)
+        )
+
+async def admin_cancel_binance_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Từ chối nạp Binance"""
+    query = update.callback_query
+    await query.answer()
+    
+    deposit_id = int(query.data.split("_")[2])
+    
+    from database import cancel_binance_deposit, get_binance_deposit_detail, get_pending_binance_deposits
+    
+    # Lấy thông tin trước khi hủy
+    deposit = await get_binance_deposit_detail(deposit_id)
+    if deposit:
+        user_id = deposit[1]
+        usdt_amount = deposit[2]
+        
+        await cancel_binance_deposit(deposit_id)
+        
+        # Thông báo cho user
+        try:
+            await context.bot.send_message(
+                user_id,
+                f"❌ YÊU CẦU NẠP BINANCE BỊ TỪ CHỐI!\n\n"
+                f"💵 Số tiền: {usdt_amount} USDT\n\n"
+                f"Lý do: Không xác nhận được giao dịch.\n"
+                f"Vui lòng liên hệ admin nếu cần hỗ trợ."
+            )
+        except:
+            pass
+    
+    # Xóa message cũ
+    try:
+        await query.message.delete()
+    except:
+        pass
+    
+    deposits = await get_pending_binance_deposits()
+    
+    if not deposits:
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="❌ Đã từ chối!\n\n🔶 Không còn yêu cầu nào.",
+            reply_markup=back_keyboard("admin")
+        )
+    else:
+        from keyboards import pending_binance_deposits_keyboard
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=f"❌ Đã từ chối!\n\n🔶 Còn {len(deposits)} yêu cầu:",
+            reply_markup=pending_binance_deposits_keyboard(deposits)
+        )
+
+
+# ============ USDT WITHDRAWALS ============
+
+async def handle_admin_usdt_withdraw_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler cho nút text Duyệt rút USDT"""
+    if not is_admin(update.effective_user.id):
+        return
+    
+    from database import get_pending_usdt_withdrawals
+    withdrawals = await get_pending_usdt_withdrawals()
+    
+    if not withdrawals:
+        await update.message.reply_text(
+            "💸 Không có yêu cầu rút USDT nào đang chờ duyệt.",
+            reply_markup=back_keyboard("admin")
+        )
+        return
+    
+    text = f"💸 DUYỆT RÚT USDT\n\n📋 {len(withdrawals)} yêu cầu đang chờ:\n"
+    
+    from keyboards import pending_usdt_withdrawals_keyboard
+    await update.message.reply_text(text, reply_markup=pending_usdt_withdrawals_keyboard(withdrawals))
+
+async def admin_usdt_withdrawals(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Callback handler cho menu duyệt rút USDT"""
+    query = update.callback_query
+    await query.answer()
+    
+    from database import get_pending_usdt_withdrawals
+    withdrawals = await get_pending_usdt_withdrawals()
+    
+    if not withdrawals:
+        await query.edit_message_text(
+            "💸 Không có yêu cầu rút USDT nào đang chờ duyệt.",
+            reply_markup=back_keyboard("admin")
+        )
+        return
+    
+    text = f"💸 DUYỆT RÚT USDT\n\n📋 {len(withdrawals)} yêu cầu đang chờ:\n"
+    
+    from keyboards import pending_usdt_withdrawals_keyboard
+    await query.edit_message_text(text, reply_markup=pending_usdt_withdrawals_keyboard(withdrawals))
+
+async def admin_view_usdt_withdrawal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xem chi tiết yêu cầu rút USDT"""
+    query = update.callback_query
+    await query.answer()
+    
+    withdrawal_id = int(query.data.split("_")[2])
+    
+    from database import get_usdt_withdrawal_detail
+    withdrawal = await get_usdt_withdrawal_detail(withdrawal_id)
+    
+    if not withdrawal:
+        await query.edit_message_text("❌ Không tìm thấy yêu cầu!", reply_markup=back_keyboard("admin_usdt_withdraws"))
+        return
+    
+    w_id, user_id, usdt_amount, wallet_address, network, status, created_at = withdrawal
+    
+    text = f"""
+💸 CHI TIẾT YÊU CẦU RÚT USDT #{w_id}
+
+👤 User ID: {user_id}
+💵 Số tiền: {usdt_amount} USDT
+🔗 Ví: {wallet_address}
+🌐 Network: {network}
+📅 Thời gian: {created_at[:19]}
+
+📋 Copy địa chỉ ví và chuyển USDT thủ công.
+"""
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Đã chuyển - Duyệt", callback_data=f"admin_confirmusdt_{w_id}")],
+        [InlineKeyboardButton("❌ Từ chối", callback_data=f"admin_cancelusdt_{w_id}")],
+        [InlineKeyboardButton("🔙 Quay lại", callback_data="admin_usdt_withdraws")],
+    ]
+    
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def admin_confirm_usdt_withdrawal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Duyệt rút USDT - trừ USDT của user"""
+    query = update.callback_query
+    await query.answer()
+    
+    withdrawal_id = int(query.data.split("_")[2])
+    
+    from database import confirm_usdt_withdrawal, get_pending_usdt_withdrawals, get_user_language
+    from locales import get_text
+    result = await confirm_usdt_withdrawal(withdrawal_id)
+    
+    if result:
+        user_id, usdt_amount, wallet_address = result
+        user_lang = await get_user_language(user_id)
+        # Thông báo cho user
+        try:
+            if user_lang == 'en':
+                await context.bot.send_message(
+                    user_id,
+                    f"✅ USDT WITHDRAWAL SUCCESSFUL!\n\n"
+                    f"💵 Amount: {usdt_amount} USDT\n"
+                    f"🔗 Wallet: {wallet_address}\n\n"
+                    f"💸 USDT has been sent to your wallet!"
+                )
+            else:
+                await context.bot.send_message(
+                    user_id,
+                    f"✅ RÚT USDT THÀNH CÔNG!\n\n"
+                    f"💵 Số tiền: {usdt_amount} USDT\n"
+                    f"🔗 Ví: {wallet_address}\n\n"
+                    f"💸 USDT đã được chuyển vào ví của bạn!"
+                )
+        except:
+            pass
+        
+        text = f"✅ Đã duyệt! Trừ {usdt_amount} USDT của user {user_id}"
+    else:
+        text = "❌ Không thể duyệt! User không đủ số dư USDT."
+    
+    withdrawals = await get_pending_usdt_withdrawals()
+    
+    if not withdrawals:
+        await query.edit_message_text(
+            text + "\n\n💸 Không còn yêu cầu nào.",
+            reply_markup=back_keyboard("admin")
+        )
+    else:
+        from keyboards import pending_usdt_withdrawals_keyboard
+        await query.edit_message_text(
+            text + f"\n\n💸 Còn {len(withdrawals)} yêu cầu:",
+            reply_markup=pending_usdt_withdrawals_keyboard(withdrawals)
+        )
+
+async def admin_cancel_usdt_withdrawal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Từ chối rút USDT"""
+    query = update.callback_query
+    await query.answer()
+    
+    withdrawal_id = int(query.data.split("_")[2])
+    
+    from database import cancel_usdt_withdrawal, get_usdt_withdrawal_detail, get_pending_usdt_withdrawals, get_user_language
+    
+    # Lấy thông tin trước khi hủy
+    withdrawal = await get_usdt_withdrawal_detail(withdrawal_id)
+    if withdrawal:
+        user_id = withdrawal[1]
+        usdt_amount = withdrawal[2]
+        user_lang = await get_user_language(user_id)
+        
+        await cancel_usdt_withdrawal(withdrawal_id)
+        
+        # Thông báo cho user
+        try:
+            if user_lang == 'en':
+                await context.bot.send_message(
+                    user_id,
+                    f"❌ USDT WITHDRAWAL REJECTED!\n\n"
+                    f"💵 Amount: {usdt_amount} USDT\n\n"
+                    f"Please contact admin for support."
+                )
+            else:
+                await context.bot.send_message(
+                    user_id,
+                    f"❌ YÊU CẦU RÚT USDT BỊ TỪ CHỐI!\n\n"
+                    f"💵 Số tiền: {usdt_amount} USDT\n\n"
+                    f"Vui lòng liên hệ admin nếu cần hỗ trợ."
+                )
+        except:
+            pass
+    
+    withdrawals = await get_pending_usdt_withdrawals()
+    
+    if not withdrawals:
+        await query.edit_message_text(
+            "❌ Đã từ chối!\n\n💸 Không còn yêu cầu nào.",
+            reply_markup=back_keyboard("admin")
+        )
+    else:
+        from keyboards import pending_usdt_withdrawals_keyboard
+        await query.edit_message_text(
+            f"❌ Đã từ chối!\n\n💸 Còn {len(withdrawals)} yêu cầu:",
+            reply_markup=pending_usdt_withdrawals_keyboard(withdrawals)
+        )
