@@ -7,9 +7,8 @@ from telegram.ext import (
     ConversationHandler, MessageHandler, filters
 )
 from config import BOT_TOKEN
-from database import init_db, get_setting, log_telegram_message
-from handlers.chat_logger import log_incoming_message
-from handlers.start import start_command, back_to_main, handle_history_text, handle_balance, set_language, handle_change_language, delete_message
+from database import init_db, get_setting
+from handlers.start import start_command, back_to_main, handle_history_text, handle_balance, set_language, handle_change_language
 from handlers.shop import (
     show_shop, show_product, confirm_buy, show_account,
     show_history, show_deposit, process_deposit, handle_deposit_text,
@@ -63,77 +62,7 @@ logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('telegram').setLevel(logging.WARNING)
 
 async def post_init(application):
-    # Wrap Telegram API send methods to capture outgoing messages for admin chat history.
-    original_send_message = application.bot.send_message
-    original_send_document = application.bot.send_document
-    original_send_photo = application.bot.send_photo
-
-    async def send_message_logged(*args, **kwargs):
-        result = await original_send_message(*args, **kwargs)
-        try:
-            if getattr(result.chat, "type", None) == "private":
-                await log_telegram_message(
-                    chat_id=result.chat.id,
-                    message_id=result.message_id,
-                    direction="out",
-                    message_type="text",
-                    text=getattr(result, "text", None),
-                    payload=None,
-                    sent_at=getattr(result, "date", None),
-                )
-        except Exception:
-            logger.exception("Failed to log outgoing send_message")
-        return result
-
-    async def send_document_logged(*args, **kwargs):
-        result = await original_send_document(*args, **kwargs)
-        try:
-            if getattr(result.chat, "type", None) == "private":
-                doc = getattr(result, "document", None)
-                payload = None
-                if doc:
-                    payload = {
-                        "file_id": getattr(doc, "file_id", None),
-                        "file_name": getattr(doc, "file_name", None),
-                        "mime_type": getattr(doc, "mime_type", None),
-                    }
-                await log_telegram_message(
-                    chat_id=result.chat.id,
-                    message_id=result.message_id,
-                    direction="out",
-                    message_type="document",
-                    text=getattr(result, "caption", None),
-                    payload=payload,
-                    sent_at=getattr(result, "date", None),
-                )
-        except Exception:
-            logger.exception("Failed to log outgoing send_document")
-        return result
-
-    async def send_photo_logged(*args, **kwargs):
-        result = await original_send_photo(*args, **kwargs)
-        try:
-            if getattr(result.chat, "type", None) == "private":
-                photos = getattr(result, "photo", None) or []
-                payload = None
-                if photos:
-                    payload = {"file_id": getattr(photos[-1], "file_id", None)}
-                await log_telegram_message(
-                    chat_id=result.chat.id,
-                    message_id=result.message_id,
-                    direction="out",
-                    message_type="photo",
-                    text=getattr(result, "caption", None),
-                    payload=payload,
-                    sent_at=getattr(result, "date", None),
-                )
-        except Exception:
-            logger.exception("Failed to log outgoing send_photo")
-        return result
-
-    application.bot.send_message = send_message_logged  # type: ignore[assignment]
-    application.bot.send_document = send_document_logged  # type: ignore[assignment]
-    application.bot.send_photo = send_photo_logged  # type: ignore[assignment]
+    pass  # Database already initialized in main()
 
 def setup_bot():
     app = (
@@ -145,9 +74,6 @@ def setup_bot():
         .write_timeout(30)
         .build()
     )
-
-    # Log incoming updates before other handlers (conversation handlers may stop processing).
-    app.add_handler(MessageHandler(filters.ALL, log_incoming_message), group=-1)
     
     # Add product conversation
     add_product_conv = ConversationHandler(
@@ -304,7 +230,6 @@ def setup_bot():
     
     # User callbacks
     app.add_handler(CallbackQueryHandler(set_language, pattern="^set_lang_(vi|en)$"))
-    app.add_handler(CallbackQueryHandler(delete_message, pattern="^delete_msg$"))
     app.add_handler(CallbackQueryHandler(back_to_main, pattern="^back_main$"))
     app.add_handler(CallbackQueryHandler(show_shop, pattern="^shop$"))
     app.add_handler(CallbackQueryHandler(show_product, pattern="^buy_\\d+$"))

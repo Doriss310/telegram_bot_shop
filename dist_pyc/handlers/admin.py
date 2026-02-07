@@ -6,18 +6,16 @@ from database import (
     get_pending_withdrawals, confirm_withdrawal, cancel_withdrawal,
     get_bank_settings, set_setting, get_setting, get_all_user_ids,
     get_stock_by_product, get_stock_detail, update_stock_content, delete_stock, get_product,
-    delete_all_stock, export_stock, get_sold_codes_by_product, get_sold_codes_by_user, search_user_by_id,
-    get_user_language
+    delete_all_stock, export_stock, get_sold_codes_by_product, get_sold_codes_by_user, search_user_by_id
 )
 from keyboards import (
     admin_menu_keyboard, admin_products_keyboard, admin_stock_keyboard,
     pending_deposits_keyboard, pending_withdrawals_keyboard, back_keyboard, main_menu_keyboard,
-    admin_reply_keyboard, admin_view_stock_keyboard,
+    admin_reply_keyboard, user_reply_keyboard, admin_view_stock_keyboard,
     admin_stock_list_keyboard, admin_stock_detail_keyboard, admin_sold_codes_keyboard
 )
 import io
 from config import ADMIN_IDS
-from helpers.ui import get_user_keyboard
 
 # States
 ADD_PRODUCT_NAME, ADD_PRODUCT_PRICE = range(2)
@@ -494,8 +492,7 @@ async def admin_cancel_withdrawal(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text(text, reply_markup=pending_withdrawals_keyboard(withdrawals))
 
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lang = await get_user_language(update.effective_user.id)
-    await update.message.reply_text("❌ Đã hủy.", reply_markup=await get_user_keyboard(lang))
+    await update.message.reply_text("❌ Đã hủy.", reply_markup=user_reply_keyboard())
     return ConversationHandler.END
 
 # Admin reply keyboard handlers
@@ -606,10 +603,9 @@ async def handle_admin_bank_text(update: Update, context: ContextTypes.DEFAULT_T
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_exit_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lang = await get_user_language(update.effective_user.id)
     await update.message.reply_text(
         "👋 Đã thoát Admin Panel",
-        reply_markup=await get_user_keyboard(lang)
+        reply_markup=user_reply_keyboard()
     )
 
 # Notification to all users

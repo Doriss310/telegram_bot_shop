@@ -1,54 +1,21 @@
 ﻿from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 
-def user_reply_keyboard(lang: str = 'vi', flags: dict | None = None):
-    flags = flags or {}
-    def enabled(key: str, default: bool = True) -> bool:
-        return bool(flags.get(key, default))
-
-    def build_rows(buttons: list[str]) -> list[list[KeyboardButton]]:
-        rows: list[list[KeyboardButton]] = []
-        row: list[KeyboardButton] = []
-        for label in buttons:
-            row.append(KeyboardButton(label))
-            if len(row) == 2:
-                rows.append(row)
-                row = []
-        if row:
-            rows.append(row)
-        return rows
-
+def user_reply_keyboard(lang: str = 'vi'):
     if lang == 'en':
         # English: Only Binance deposit (foreigners can't use SePay)
-        buttons: list[str] = []
-        if enabled("show_shop"):
-            buttons.append("🛒 Shop")
-        if enabled("show_balance"):
-            buttons.append("💰 Balance")
-        if enabled("show_usdt"):
-            buttons.append("🔶 Deposit")
-        if enabled("show_history"):
-            buttons.append("📜 History")
-        if enabled("show_language"):
-            buttons.append("🌐 Language")
-        keyboard = build_rows(buttons)
+        keyboard = [
+            [KeyboardButton("🛒 Shop"), KeyboardButton("💰 Balance")],
+            [KeyboardButton("🔶 Deposit"), KeyboardButton("📜 History")],
+            [KeyboardButton("🌐 Language")],
+        ]
     else:
         # Vietnamese: Both SePay (VND) and Binance (USDT)
-        buttons = []
-        if enabled("show_shop"):
-            buttons.append("🛒 Danh mục")
-        if enabled("show_balance"):
-            buttons.append("💰 Số dư")
-        if enabled("show_deposit"):
-            buttons.append("➕ Nạp tiền")
-        if enabled("show_withdraw"):
-            buttons.append("💸 Rút tiền")
-        if enabled("show_usdt"):
-            buttons.append("💵 Nạp USDT")
-        if enabled("show_history"):
-            buttons.append("📜 Lịch sử")
-        if enabled("show_language"):
-            buttons.append("🌐 Ngôn ngữ")
-        keyboard = build_rows(buttons)
+        keyboard = [
+            [KeyboardButton("🛒 Danh mục"), KeyboardButton("💰 Số dư")],
+            [KeyboardButton("➕ Nạp tiền"), KeyboardButton("💸 Rút tiền")],
+            [KeyboardButton("💵 Nạp USDT"), KeyboardButton("📜 Lịch sử")],
+            [KeyboardButton("🌐 Ngôn ngữ")],
+        ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 def admin_reply_keyboard():
@@ -108,9 +75,9 @@ def products_keyboard(products, lang: str = 'vi'):
             InlineKeyboardButton(f"{p['name']} - {price_text} ({status})", callback_data=f"buy_{p['id']}")
         ])
     refresh_text = "🔄 Refresh" if lang == 'en' else "🔄 Làm mới"
-    delete_text = "🗑 Delete" if lang == 'en' else "🗑 Xóa"
+    back_text = "🔙 Back" if lang == 'en' else "🔙 Quay lại"
     keyboard.append([InlineKeyboardButton(refresh_text, callback_data="shop")])
-    keyboard.append([InlineKeyboardButton(delete_text, callback_data="delete_msg")])
+    keyboard.append([InlineKeyboardButton(back_text, callback_data="back_main")])
     return InlineKeyboardMarkup(keyboard)
 
 def confirm_buy_keyboard(product_id, stock=1, max_can_buy=1):
@@ -125,14 +92,11 @@ def deposit_amounts_keyboard():
         if i + 1 < len(amounts):
             row.append(InlineKeyboardButton(f"{amounts[i+1]:,}đ", callback_data=f"deposit_{amounts[i+1]}"))
         keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("🗑 Xóa", callback_data="delete_msg")])
+    keyboard.append([InlineKeyboardButton(" Quay lại", callback_data="back_main")])
     return InlineKeyboardMarkup(keyboard)
 
 def back_keyboard(callback_data="back_main"):
     return InlineKeyboardMarkup([[InlineKeyboardButton(" Quay lại", callback_data=callback_data)]])
-
-def delete_keyboard():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Xóa", callback_data="delete_msg")]])
 
 def admin_products_keyboard(products):
     keyboard = []

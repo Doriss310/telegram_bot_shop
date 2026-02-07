@@ -453,7 +453,60 @@ Nếu gặp vấn đề, hãy:
 
 ## 📝 Ghi chú
 
-- Bot sử dụng SQLite, database lưu tại `data/shop.db`
+- Bot hỗ trợ Supabase (Postgres + Auth + Storage). SQLite vẫn có thể dùng cho local.
 - Logs được lưu tại `bot.log`
 - Nên backup thư mục `data/` định kỳ
 - Khi deploy production, nên dùng Docker để dễ quản lý
+
+---
+
+## ☁️ Supabase (Postgres + Auth + Storage)
+
+### 1) Tạo schema
+Chạy file `supabase_schema.sql` trong Supabase SQL editor.
+
+### 2) Cập nhật .env
+Thêm các biến sau (xem mẫu `.env.example`):
+```
+USE_SUPABASE=true
+SUPABASE_URL=...
+SUPABASE_ANON_KEY=...
+SUPABASE_SERVICE_ROLE_KEY=...
+```
+```
+# Chọn mode thanh toán sản phẩm
+# direct: luôn tạo VietQR khi mua hàng
+# hybrid: chỉ tạo VietQR khi thiếu balance
+# balance: phải nạp balance trước khi mua
+PAYMENT_MODE=hybrid
+```
+
+### 3) Migrate dữ liệu từ SQLite
+```
+python scripts/migrate_sqlite_to_supabase.py
+```
+
+### 4) Tạo admin cho Dashboard
+1. Tạo user trong Supabase Auth (email/password).
+2. Lấy `user_id` (UUID).
+3. Insert vào bảng `public.admin_users` với role `superadmin` hoặc `admin`.
+
+---
+
+## 🧭 Admin Dashboard (Next.js)
+
+Dashboard nằm trong thư mục `admin-dashboard/`.
+
+### Cấu hình env
+Tạo file `admin-dashboard/.env.local`:
+```
+NEXT_PUBLIC_SUPABASE_URL=...
+NEXT_PUBLIC_SUPABASE_ANON_KEY=...
+```
+
+### Chạy local
+```
+cd admin-dashboard
+npm install
+npm run dev
+```

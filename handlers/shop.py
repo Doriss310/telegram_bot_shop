@@ -6,26 +6,39 @@ from telegram.ext import ContextTypes, ConversationHandler
 from database import (
     get_products, get_product, get_balance, update_balance,
     get_available_stock, mark_stock_sold, create_order, create_order_bulk,
-    get_user_orders, create_deposit, get_or_create_user,
-    get_bank_settings, get_available_stock_batch, mark_stock_sold_batch,
+    get_user_orders, create_deposit_with_settings, get_or_create_user,
+    create_direct_order_with_settings,
+    get_available_stock_batch, mark_stock_sold_batch,
     get_user_language, get_balance_usdt, update_balance_usdt
 )
 from keyboards import (
     products_keyboard, confirm_buy_keyboard,
-    back_keyboard, main_menu_keyboard, user_reply_keyboard
+    main_menu_keyboard, delete_keyboard
 )
-from config import MOMO_PHONE, MOMO_NAME, ADMIN_IDS, SEPAY_ACCOUNT_NUMBER, SEPAY_BANK_NAME, SEPAY_ACCOUNT_NAME, BINANCE_PAY_ID, USDT_RATE
+from helpers.ui import get_user_keyboard, is_feature_enabled
+from helpers.menu import delete_last_menu_message, set_last_menu_message, clear_last_menu_message
+from helpers.sepay_state import mark_vietqr_message, mark_bot_message
+from helpers.formatting import format_stock_items
+from config import MOMO_PHONE, MOMO_NAME, ADMIN_IDS, SEPAY_ACCOUNT_NUMBER, SEPAY_BANK_NAME, SEPAY_ACCOUNT_NAME, BINANCE_PAY_ID, USDT_RATE, PAYMENT_MODE
 from locales import get_text
 
 def make_file(items: list, header: str = "") -> io.BytesIO:
     """Tạo file nhanh từ list items"""
     if header:
-        content = header + "\n" + "="*40 + "\n\n" + "\n".join(items)
+        content = header + "\n" + "="*40 + "\n\n" + "\n\n".join(items)
     else:
-        content = "\n".join(items)
+        content = "\n\n".join(items)
     buf = io.BytesIO(content.encode('utf-8'))
     buf.seek(0)
     return buf
+
+def format_description_block(description: str | None, label: str = "📝 Mô tả") -> str:
+    if not description:
+        return ""
+    cleaned = str(description).strip()
+    if not cleaned:
+        return ""
+    return f"{label}:\n{cleaned}\n\n"
 
 # Bank codes cho VietQR
 BANK_CODES = {
@@ -69,6 +82,69 @@ def generate_vietqr_url(bank_name: str, account_number: str, account_name: str, 
     qr_url = f"https://img.vietqr.io/image/{bank_code}-{account_number}-compact2.png?amount={amount}&addInfo={content}&accountName={account_name.replace(' ', '%20')}"
     return qr_url
 
+
+async def get_payment_mode() -> str:
+    mode = PAYMENT_MODE or "hybrid"
+    try:
+        from database import get_setting
+        mode = await get_setting("payment_mode", PAYMENT_MODE)
+    except Exception:
+        pass
+    mode = (mode or "hybrid").lower()
+    if mode not in ("direct", "hybrid", "balance"):
+        mode = "hybrid"
+    return mode
+
+
+async def send_direct_payment(context: ContextTypes.DEFAULT_TYPE, chat_id: int, lang: str, user_id: int,
+                              product_id: int, product_name: str, quantity: int, unit_price: int, total_price: int):
+    pay_code = f"SEBUY {user_id}{random.randint(1000, 9999)}"
+    bank_settings = await create_direct_order_with_settings(
+        user_id=user_id,
+        product_id=product_id,
+        quantity=quantity,
+        unit_price=unit_price,
+        amount=int(total_price),
+        code=pay_code,
+    )
+    bank_name = bank_settings['bank_name'] or SEPAY_BANK_NAME
+    account_number = bank_settings['account_number'] or SEPAY_ACCOUNT_NUMBER
+    account_name = bank_settings['account_name'] or SEPAY_ACCOUNT_NAME
+
+    if account_number:
+        qr_url = generate_vietqr_url(bank_name, account_number, account_name, int(total_price), pay_code)
+        text = (
+            f"💳 THANH TOÁN ĐƠN HÀNG\n\n"
+            f"🏦 Ngân hàng: <code>{bank_name}</code>\n"
+            f"🔢 Số TK: <code>{account_number}</code>\n"
+            f"👤 Tên: <code>{account_name}</code>\n"
+            f"💰 Số tiền: <code>{int(total_price):,}đ</code>\n"
+            f"📝 Nội dung: <code>{pay_code}</code>\n\n"
+            f"✅ Sau khi nhận tiền, hệ thống sẽ tự gửi sản phẩm."
+        )
+        photo_msg = await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=qr_url,
+            caption=text,
+            parse_mode="HTML",
+            reply_markup=await get_user_keyboard(lang)
+        )
+        mark_vietqr_message(chat_id, photo_msg.message_id)
+    else:
+        text = (
+            f"📱 MoMo: {MOMO_PHONE}\n"
+            f"👤 {MOMO_NAME}\n"
+            f"💰 {int(total_price):,}đ\n"
+            f"📝 {pay_code}\n\n"
+            f"✅ Sau khi nhận tiền, hệ thống sẽ tự gửi sản phẩm."
+        )
+        msg = await context.bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=await get_user_keyboard(lang)
+        )
+        mark_bot_message(chat_id, msg.message_id)
+
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
@@ -86,9 +162,14 @@ WAITING_USDT_WITHDRAW_WALLET = 8
 async def handle_shop_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     lang = await get_user_language(user_id)
+    if not await is_feature_enabled("show_shop"):
+        await update.message.reply_text("⚠️ Tính năng này đang tạm tắt.", reply_markup=await get_user_keyboard(lang))
+        return
+    await delete_last_menu_message(context, update.effective_chat.id)
     products = await get_products()
     text = get_text(lang, "select_product")
-    await update.message.reply_text(text, reply_markup=products_keyboard(products, lang))
+    menu_msg = await update.message.reply_text(text, reply_markup=products_keyboard(products, lang))
+    set_last_menu_message(context, menu_msg)
 
 async def handle_buy_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Xử lý khi user nhập số lượng muốn mua"""
@@ -113,7 +194,10 @@ async def handle_buy_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     
     if quantity > max_can_buy:
-        await update.message.reply_text(get_text(lang, "max_quantity").format(max=max_can_buy))
+        await update.message.reply_text(
+            get_text(lang, "max_quantity").format(max=max_can_buy),
+            reply_markup=await get_user_keyboard(lang)
+        )
         return
     
     # Xử lý mua hàng
@@ -140,16 +224,46 @@ async def handle_buy_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE
         balance = await get_balance(user_id)
         currency_symbol = "đ"
     
-    if balance < total_price:
-        if currency == 'usdt':
+    # Determine payment mode for VND orders
+    payment_mode = PAYMENT_MODE
+    if currency != 'usdt':
+        try:
+            from database import get_setting
+            payment_mode = (await get_setting("payment_mode", PAYMENT_MODE)).lower()
+        except Exception:
+            payment_mode = PAYMENT_MODE
+
+    if currency == 'usdt':
+        if balance < total_price:
             await update.message.reply_text(
                 get_text(lang, "not_enough_balance").format(balance=f"{balance:.2f} USDT", need=f"{total_price} USDT")
             )
-        else:
+            return
+    else:
+        if payment_mode == 'balance' and balance < total_price:
             await update.message.reply_text(
                 get_text(lang, "not_enough_balance").format(balance=f"{balance:,}đ", need=f"{total_price:,}đ")
             )
-        return
+            return
+
+        should_direct = payment_mode == 'direct' or (payment_mode == 'hybrid' and balance < total_price)
+        if should_direct:
+            await send_direct_payment(
+                context=context,
+                chat_id=update.effective_user.id,
+                lang=lang,
+                user_id=user_id,
+                product_id=product_id,
+                product_name=product['name'],
+                quantity=quantity,
+                unit_price=unit_price,
+                total_price=int(total_price),
+            )
+
+            context.user_data.pop('buying_product_id', None)
+            context.user_data.pop('buying_max', None)
+            context.user_data.pop('buying_currency', None)
+            return
     
     # Lấy stock batch
     stocks = await get_available_stock_batch(product_id, quantity)
@@ -189,26 +303,37 @@ async def handle_buy_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE
         balance_text = f"{new_balance:,}đ"
         total_text = f"{int(actual_total):,}đ"
     
+    format_data = product.get("format_data") if product else None
+    formatted_items_plain = format_stock_items(purchased_items, format_data, html=False)
     # Tạo file
-    header = f"Product: {product['name']}\nQty: {len(purchased_items)}\nTotal: {total_text}"
-    file_buf = make_file(purchased_items, header)
+    description = (product.get("description") or "").strip()
+    header_lines = [
+        f"Product: {product['name']}",
+        f"Qty: {len(purchased_items)}",
+        f"Total: {total_text}",
+    ]
+    if description:
+        header_lines.append(f"Description: {description}")
+    header = "\n".join(header_lines)
+    file_buf = make_file(formatted_items_plain, header)
     filename = f"{product['name']}_{len(purchased_items)}.txt"
     
     success_text = get_text(lang, "buy_success").format(
         name=product['name'], qty=len(purchased_items), total=total_text, balance=balance_text
     )
     
-    if len(purchased_items) > 10:
+    description_block = format_description_block(description)
+    if len(purchased_items) > 5:
         await update.message.reply_document(
             document=file_buf,
             filename=filename,
             caption=success_text,
-            reply_markup=user_reply_keyboard(lang)
+            reply_markup=await get_user_keyboard(lang)
         )
     else:
-        items_formatted = "\n".join([f"<code>{item}</code>" for item in purchased_items])
-        text = f"{success_text}\n\n{items_formatted}"
-        await update.message.reply_text(text, parse_mode="HTML", reply_markup=user_reply_keyboard(lang))
+        items_formatted = "\n\n".join(format_stock_items(purchased_items, format_data, html=True))
+        text = f"{success_text}\n\n{description_block}🔐 Account:\n{items_formatted}"
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=await get_user_keyboard(lang))
     
     # Clear trạng thái mua
     context.user_data.pop('buying_product_id', None)
@@ -218,6 +343,10 @@ async def handle_buy_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def handle_deposit_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     lang = await get_user_language(user_id)
+    if not await is_feature_enabled("show_deposit"):
+        await update.message.reply_text("⚠️ Tính năng này đang tạm tắt.", reply_markup=await get_user_keyboard(lang))
+        return ConversationHandler.END
+    await delete_last_menu_message(context, update.effective_chat.id)
     context.user_data['waiting_deposit'] = True
     context.user_data['user_lang'] = lang
     
@@ -235,10 +364,13 @@ async def process_deposit_amount(update: Update, context: ContextTypes.DEFAULT_T
     text_input = update.message.text.strip()
     user_id = update.effective_user.id
     lang = await get_user_language(user_id)
+    if not await is_feature_enabled("show_deposit"):
+        await update.message.reply_text("⚠️ Tính năng này đang tạm tắt.", reply_markup=await get_user_keyboard(lang))
+        return ConversationHandler.END
     
     # Xử lý nút Hủy
     if text_input in ["❌ Hủy", "❌ Cancel"]:
-        await update.message.reply_text(get_text(lang, "deposit_cancelled"), reply_markup=user_reply_keyboard(lang))
+        await update.message.reply_text(get_text(lang, "deposit_cancelled"), reply_markup=await get_user_keyboard(lang))
         return ConversationHandler.END
     
     try:
@@ -252,14 +384,13 @@ async def process_deposit_amount(update: Update, context: ContextTypes.DEFAULT_T
         # Generate unique code
         code = f"SEVQR NAP{user_id}{random.randint(1000, 9999)}"
         
-        # Save deposit request
-        await create_deposit(user_id, amount, code)
-        
-        # Lấy settings từ database
-        bank_settings = await get_bank_settings()
-        bank_name = bank_settings['bank_name']
-        account_number = bank_settings['account_number']
-        account_name = bank_settings['account_name']
+        # Save deposit + fetch bank settings in one round-trip (Supabase)
+        bank_settings = await create_deposit_with_settings(user_id, amount, code)
+
+        # Lấy settings từ database, fallback về .env nếu chưa có
+        bank_name = bank_settings['bank_name'] or SEPAY_BANK_NAME
+        account_number = bank_settings['account_number'] or SEPAY_ACCOUNT_NUMBER
+        account_name = bank_settings['account_name'] or SEPAY_ACCOUNT_NAME
         
         if account_number:
             qr_url = generate_vietqr_url(bank_name, account_number, account_name, amount, code)
@@ -268,15 +399,17 @@ async def process_deposit_amount(update: Update, context: ContextTypes.DEFAULT_T
                 bank=bank_name, account=account_number, name=account_name,
                 amount=f"{amount:,}", code=code
             )
-            await update.message.reply_photo(
+            photo_msg = await update.message.reply_photo(
                 photo=qr_url,
                 caption=text,
                 parse_mode="HTML",
-                reply_markup=user_reply_keyboard(lang)
+                reply_markup=await get_user_keyboard(lang)
             )
+            mark_vietqr_message(update.effective_chat.id, photo_msg.message_id)
         else:
             text = f"📱 MoMo: {MOMO_PHONE}\n👤 {MOMO_NAME}\n💰 {amount:,}đ\n📝 {code}"
-            await update.message.reply_text(text, reply_markup=user_reply_keyboard(lang))
+            msg = await update.message.reply_text(text, reply_markup=await get_user_keyboard(lang))
+            mark_bot_message(update.effective_chat.id, msg.message_id)
         
         context.user_data['waiting_deposit'] = False
         return ConversationHandler.END
@@ -288,6 +421,10 @@ async def process_deposit_amount(update: Update, context: ContextTypes.DEFAULT_T
 async def handle_withdraw_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     lang = await get_user_language(user_id)
+    if not await is_feature_enabled("show_withdraw"):
+        await update.message.reply_text("⚠️ Tính năng này đang tạm tắt.", reply_markup=await get_user_keyboard(lang))
+        return ConversationHandler.END
+    await delete_last_menu_message(context, update.effective_chat.id)
     balance = await get_balance(user_id)
     
     from database import get_user_pending_withdrawal
@@ -313,9 +450,12 @@ async def process_withdraw_amount(update: Update, context: ContextTypes.DEFAULT_
     text_input = update.message.text.strip()
     user_id = update.effective_user.id
     lang = await get_user_language(user_id)
+    if not await is_feature_enabled("show_withdraw"):
+        await update.message.reply_text("⚠️ Tính năng này đang tạm tắt.", reply_markup=await get_user_keyboard(lang))
+        return ConversationHandler.END
     
     if text_input in ["❌ Hủy", "❌ Cancel"]:
-        await update.message.reply_text(get_text(lang, "withdraw_cancelled"), reply_markup=user_reply_keyboard(lang))
+        await update.message.reply_text(get_text(lang, "withdraw_cancelled"), reply_markup=await get_user_keyboard(lang))
         return ConversationHandler.END
     
     try:
@@ -354,9 +494,12 @@ async def process_withdraw_bank(update: Update, context: ContextTypes.DEFAULT_TY
     text_input = update.message.text.strip()
     user_id = update.effective_user.id
     lang = await get_user_language(user_id)
+    if not await is_feature_enabled("show_withdraw"):
+        await update.message.reply_text("⚠️ Tính năng này đang tạm tắt.", reply_markup=await get_user_keyboard(lang))
+        return ConversationHandler.END
     
     if text_input in ["❌ Hủy", "❌ Cancel"]:
-        await update.message.reply_text(get_text(lang, "withdraw_cancelled"), reply_markup=user_reply_keyboard(lang))
+        await update.message.reply_text(get_text(lang, "withdraw_cancelled"), reply_markup=await get_user_keyboard(lang))
         return ConversationHandler.END
     
     valid_banks = ["MoMo", "MBBank", "Vietcombank", "VietinBank", "BIDV", "Techcombank", "ACB", "TPBank"]
@@ -381,9 +524,12 @@ async def process_withdraw_account(update: Update, context: ContextTypes.DEFAULT
     text_input = update.message.text.strip()
     user_id = update.effective_user.id
     lang = await get_user_language(user_id)
+    if not await is_feature_enabled("show_withdraw"):
+        await update.message.reply_text("⚠️ Tính năng này đang tạm tắt.", reply_markup=await get_user_keyboard(lang))
+        return ConversationHandler.END
     
     if text_input in ["❌ Hủy", "❌ Cancel"]:
-        await update.message.reply_text(get_text(lang, "withdraw_cancelled"), reply_markup=user_reply_keyboard(lang))
+        await update.message.reply_text(get_text(lang, "withdraw_cancelled"), reply_markup=await get_user_keyboard(lang))
         return ConversationHandler.END
     
     account_number = text_input
@@ -399,46 +545,57 @@ async def process_withdraw_account(update: Update, context: ContextTypes.DEFAULT
     text = get_text(lang, "withdraw_submitted").format(
         amount=f"{amount:,}", bank=bank_name, account=account_number, balance=f"{balance:,}"
     )
-    await update.message.reply_text(text, reply_markup=user_reply_keyboard(lang))
+    await update.message.reply_text(text, reply_markup=await get_user_keyboard(lang))
     return ConversationHandler.END
 
 async def show_shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
+    if not await is_feature_enabled("show_shop"):
+        await query.edit_message_text("⚠️ Tính năng này đang tạm tắt.", reply_markup=delete_keyboard())
+        return
     
     products = await get_products()
+    lang = await get_user_language(query.from_user.id)
     text = "👉 CHỌN SẢN PHẨM BÊN DƯỚI:"
-    await query.edit_message_text(text, reply_markup=products_keyboard(products))
+    await query.edit_message_text(text, reply_markup=products_keyboard(products, lang))
+    set_last_menu_message(context, query.message)
 
 async def show_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
+
     product_id = int(query.data.split("_")[1])
     product = await get_product(product_id)
     user_id = query.from_user.id
     lang = await get_user_language(user_id)
+
+    if not await is_feature_enabled("show_shop"):
+        await query.edit_message_text("⚠️ Tính năng này đang tạm tắt.", reply_markup=delete_keyboard())
+        return
     
     if not product:
-        await query.edit_message_text(get_text(lang, "product_not_found"), reply_markup=back_keyboard("shop"))
+        await query.edit_message_text(get_text(lang, "product_not_found"), reply_markup=delete_keyboard())
         return
     
     if product['stock'] <= 0:
         await query.edit_message_text(
             get_text(lang, "out_of_stock").format(name=product['name']),
-            reply_markup=back_keyboard("shop")
+            reply_markup=delete_keyboard()
         )
         return
     
     user_balance = await get_balance(user_id)
     user_balance_usdt = await get_balance_usdt(user_id)
+    payment_mode = await get_payment_mode()
     
     if lang == 'en':
         # English: USDT only
         if product['price_usdt'] <= 0:
             await query.edit_message_text(
                 f"❌ {product['name']} is not available for USDT payment.",
-                reply_markup=back_keyboard("shop")
+                reply_markup=delete_keyboard()
             )
             return
         max_buy = min(product['stock'], int(user_balance_usdt // product['price_usdt']))
@@ -451,10 +608,14 @@ async def show_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"\n\n📝 Enter quantity (1-{max_buy}):"
         else:
             text += "\n\n❌ Insufficient balance!"
-        await query.edit_message_text(text, reply_markup=back_keyboard("shop"))
+        await query.edit_message_text(text, reply_markup=delete_keyboard())
+        set_last_menu_message(context, query.message)
     else:
         # Vietnamese: VND or USDT choice
-        max_vnd = min(product['stock'], user_balance // product['price']) if product['price'] > 0 else 0
+        if payment_mode == "balance":
+            max_vnd = min(product['stock'], user_balance // product['price']) if product['price'] > 0 else 0
+        else:
+            max_vnd = product['stock'] if product['price'] > 0 else 0
         max_usdt = min(product['stock'], int(user_balance_usdt // product['price_usdt'])) if product['price_usdt'] > 0 else 0
         
         context.user_data['buying_product_id'] = product_id
@@ -462,44 +623,82 @@ async def show_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = f"📦 {product['name']}\n💰 Giá: {product['price']:,}đ"
         if product['price_usdt'] > 0:
             text += f" | {product['price_usdt']} USDT"
-        text += f"\n📊 Còn: {product['stock']}\n\n💳 Số dư VNĐ: {user_balance:,}đ (mua tối đa {max_vnd})"
-        text += f"\n💵 Số dư USDT: {user_balance_usdt:.2f} (mua tối đa {max_usdt})"
-        text += "\n\nChọn phương thức thanh toán:"
+        text += f"\n📊 Còn: {product['stock']}"
+        if payment_mode == "balance":
+            text += f"\n\n💳 Số dư VNĐ: {user_balance:,}đ (mua tối đa {max_vnd})"
+            text += f"\n💵 Số dư USDT: {user_balance_usdt:.2f} (mua tối đa {max_usdt})"
+
+        if payment_mode == "balance" and max_vnd == 0 and max_usdt == 0:
+            text += "\n\n❌ Số dư không đủ. Vui lòng nạp thêm."
+        else:
+            text += "\n\nChọn phương thức thanh toán:"
         
         keyboard = []
-        if product['price'] > 0 and max_vnd > 0:
-            keyboard.append([InlineKeyboardButton(f"💰 VNĐ ({product['price']:,}đ)", callback_data=f"pay_vnd_{product_id}")])
+        if product['price'] > 0 and (payment_mode != "balance" or max_vnd > 0):
+            vnd_label = "💰 VNĐ"
+            show_price = True
+            if payment_mode == "direct":
+                vnd_label = "💳 VietQR"
+                show_price = False
+            elif payment_mode == "hybrid":
+                vnd_label = "💳 VNĐ/VietQR"
+            label = f"{vnd_label} ({product['price']:,}đ)" if show_price else vnd_label
+            keyboard.append([InlineKeyboardButton(label, callback_data=f"pay_vnd_{product_id}")])
         if product['price_usdt'] > 0 and max_usdt > 0:
             keyboard.append([InlineKeyboardButton(f"💵 USDT ({product['price_usdt']} USDT)", callback_data=f"pay_usdt_{product_id}")])
-        keyboard.append([InlineKeyboardButton("🔙 Quay lại", callback_data="shop")])
-        
+        keyboard.append([InlineKeyboardButton("🗑 Xóa", callback_data="delete_msg")])
+
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        set_last_menu_message(context, query.message)
 
 async def select_payment_vnd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """User chọn thanh toán bằng VNĐ"""
     query = update.callback_query
     await query.answer()
+    if not await is_feature_enabled("show_shop"):
+        await query.edit_message_text("⚠️ Tính năng này đang tạm tắt.", reply_markup=delete_keyboard())
+        return
     
     product_id = int(query.data.split("_")[2])
     product = await get_product(product_id)
     user_id = query.from_user.id
     lang = await get_user_language(user_id)
     user_balance = await get_balance(user_id)
-    
-    max_can_buy = min(product['stock'], user_balance // product['price']) if product['price'] > 0 else 0
+    payment_mode = await get_payment_mode()
+
+    if payment_mode == "balance":
+        max_can_buy = min(product['stock'], user_balance // product['price']) if product['price'] > 0 else 0
+        if max_can_buy <= 0:
+            await query.edit_message_text(get_text(lang, "not_enough_balance").format(
+                balance=f"{user_balance:,}đ", need=f"{product['price']:,}đ"
+            ), reply_markup=delete_keyboard())
+            return
+    else:
+        max_can_buy = product['stock'] if product['price'] > 0 else 0
     
     context.user_data['buying_product_id'] = product_id
     context.user_data['buying_max'] = max_can_buy
     context.user_data['buying_currency'] = 'vnd'
     
-    text = f"📦 {product['name']}\n💰 {product['price']:,}đ\n💳 {user_balance:,}đ\n🛒 Max: {max_can_buy}"
+    text = f"📦 {product['name']}\n💰 {product['price']:,}đ"
+    if payment_mode == "balance":
+        text += f"\n💳 {user_balance:,}đ"
+    elif payment_mode == "hybrid":
+        text += f"\n💳 {user_balance:,}đ (thiếu sẽ dùng VietQR)"
+    else:
+        text += "\n💳 Thanh toán VietQR"
+    text += f"\n🛒 Max: {max_can_buy}"
     text += get_text(lang, "enter_quantity").format(max=max_can_buy)
-    await query.edit_message_text(text, reply_markup=back_keyboard("shop"))
+    await query.edit_message_text(text, reply_markup=delete_keyboard())
+    set_last_menu_message(context, query.message)
 
 async def select_payment_usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """User chọn thanh toán bằng USDT"""
     query = update.callback_query
     await query.answer()
+    if not await is_feature_enabled("show_shop"):
+        await query.edit_message_text("⚠️ Tính năng này đang tạm tắt.", reply_markup=delete_keyboard())
+        return
     
     product_id = int(query.data.split("_")[2])
     product = await get_product(product_id)
@@ -515,11 +714,16 @@ async def select_payment_usdt(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     text = f"📦 {product['name']}\n💵 {product['price_usdt']} USDT\n💳 {user_balance_usdt:.2f} USDT\n🛒 Max: {max_can_buy}"
     text += get_text(lang, "enter_quantity").format(max=max_can_buy)
-    await query.edit_message_text(text, reply_markup=back_keyboard("shop"))
+    await query.edit_message_text(text, reply_markup=delete_keyboard())
+    set_last_menu_message(context, query.message)
 
 async def confirm_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    clear_last_menu_message(context, query.message)
+    if not await is_feature_enabled("show_shop"):
+        await query.edit_message_text("⚠️ Tính năng này đang tạm tắt.", reply_markup=delete_keyboard())
+        return
     
     # Parse callback: confirm_buy_{product_id}_{quantity}
     parts = query.data.split("_")
@@ -530,20 +734,38 @@ async def confirm_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     
     if not product:
-        await query.edit_message_text("❌ Sản phẩm không tồn tại!", reply_markup=back_keyboard("shop"))
+        await query.edit_message_text("❌ Sản phẩm không tồn tại!", reply_markup=delete_keyboard())
         return
     
     if product['stock'] < quantity:
-        await query.edit_message_text(f"❌ Không đủ hàng! Chỉ còn {product['stock']} sản phẩm.", reply_markup=back_keyboard("shop"))
+        await query.edit_message_text(f"❌ Không đủ hàng! Chỉ còn {product['stock']} sản phẩm.", reply_markup=delete_keyboard())
         return
     
     total_price = product['price'] * quantity
     balance = await get_balance(user_id)
-    
-    if balance < total_price:
+    payment_mode = await get_payment_mode()
+    if payment_mode == "balance" and balance < total_price:
         await query.edit_message_text(
             f"❌ Số dư không đủ!\n\n💰 Số dư: {balance:,}đ\n💵 Cần: {total_price:,}đ ({quantity}x {product['price']:,}đ)\n\nVui lòng nạp thêm tiền.",
-            reply_markup=back_keyboard("deposit")
+            reply_markup=delete_keyboard()
+        )
+        return
+
+    if payment_mode in ("direct", "hybrid") and balance < total_price:
+        await send_direct_payment(
+            context=context,
+            chat_id=query.message.chat_id,
+            lang=await get_user_language(user_id),
+            user_id=user_id,
+            product_id=product_id,
+            product_name=product['name'],
+            quantity=quantity,
+            unit_price=product['price'],
+            total_price=total_price,
+        )
+        await query.edit_message_text(
+            "✅ Đã gửi VietQR thanh toán. Sau khi nhận tiền, hệ thống sẽ tự gửi sản phẩm.",
+            reply_markup=delete_keyboard()
         )
         return
     
@@ -551,7 +773,7 @@ async def confirm_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stocks = await get_available_stock_batch(product_id, quantity)
     
     if not stocks:
-        await query.edit_message_text("❌ Sản phẩm đã hết hàng!", reply_markup=back_keyboard("shop"))
+        await query.edit_message_text("❌ Sản phẩm đã hết hàng!", reply_markup=delete_keyboard())
         return
     
     # Mark sold batch (1 query thay vì N queries)
@@ -569,13 +791,24 @@ async def confirm_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update_balance(user_id, -actual_total)
     new_balance = await get_balance(user_id)
     
+    format_data = product.get("format_data") if product else None
+    formatted_items_plain = format_stock_items(purchased_items, format_data, html=False)
     # Tạo file trước
-    header = f"Sản phẩm: {product['name']}\nSố lượng: {len(purchased_items)}\nTổng tiền: {actual_total:,}đ"
-    file_buf = make_file(purchased_items, header)
+    description = (product.get("description") or "").strip()
+    header_lines = [
+        f"Sản phẩm: {product['name']}",
+        f"Số lượng: {len(purchased_items)}",
+        f"Tổng tiền: {actual_total:,}đ",
+    ]
+    if description:
+        header_lines.append(f"Mô tả: {description}")
+    header = "\n".join(header_lines)
+    file_buf = make_file(formatted_items_plain, header)
     filename = f"{product['name']}_{len(purchased_items)}.txt"
     
     # Gửi file nếu nhiều items
-    if len(purchased_items) > 10:
+    description_block = format_description_block(description)
+    if len(purchased_items) > 5:
         await context.bot.send_document(
             chat_id=query.message.chat_id,
             document=file_buf,
@@ -584,18 +817,22 @@ async def confirm_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         # Gửi text bình thường
-        items_formatted = "\n".join([f"<code>{item}</code>" for item in purchased_items])
+        items_formatted = "\n\n".join(format_stock_items(purchased_items, format_data, html=True))
         text = f"""✅ MUA HÀNG THÀNH CÔNG!
 
 📦 {product['name']} x{len(purchased_items)}
 💰 {actual_total:,}đ | 💳 Còn {new_balance:,}đ
 
+{description_block}🔐 Account:
 {items_formatted}"""
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=back_keyboard())
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=delete_keyboard())
 
 async def show_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    if not await is_feature_enabled("show_balance"):
+        await query.edit_message_text("⚠️ Tính năng này đang tạm tắt.", reply_markup=delete_keyboard())
+        return
     
     user = await get_or_create_user(query.from_user.id, query.from_user.username)
     
@@ -606,16 +843,20 @@ async def show_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
 👤 Username: @{user['username'] or 'Chưa có'}
 💰 Số dư: {user['balance']:,}đ
 """
-    await query.edit_message_text(text, reply_markup=back_keyboard())
+    await query.edit_message_text(text, reply_markup=delete_keyboard())
 
 async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    if not await is_feature_enabled("show_history"):
+        await query.edit_message_text("⚠️ Tính năng này đang tạm tắt.", reply_markup=delete_keyboard())
+        return
     
     orders = await get_user_orders(query.from_user.id)
     
     if not orders:
-        await query.edit_message_text("📜 Bạn chưa có đơn hàng nào!", reply_markup=back_keyboard())
+        await query.edit_message_text("📜 Bạn chưa có đơn hàng nào!", reply_markup=delete_keyboard())
+        set_last_menu_message(context, query.message)
         return
     
     text = "📜 LỊCH SỬ MUA HÀNG\n\nChọn đơn để xem chi tiết:"
@@ -638,13 +879,19 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Button ngắn gọn
         keyboard.append([InlineKeyboardButton(f"#{order_id} {short_name} x{quantity} {price_str}", callback_data=f"order_detail_{order_id}")])
     
-    keyboard.append([InlineKeyboardButton("🔙 Quay lại", callback_data="back_main")])
+    keyboard.append([InlineKeyboardButton("🗑 Xóa", callback_data="delete_msg")])
     
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    set_last_menu_message(context, query.message)
 
 async def show_order_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Xem chi tiết đơn hàng - gửi file nếu nhiều items"""
     query = update.callback_query
+    clear_last_menu_message(context, query.message)
+    if not await is_feature_enabled("show_history"):
+        await query.answer()
+        await query.edit_message_text("⚠️ Tính năng này đang tạm tắt.", reply_markup=delete_keyboard())
+        return
     
     order_id = int(query.data.split("_")[2])
     
@@ -671,7 +918,7 @@ async def show_order_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Nếu ít items -> hiển thị text
     if len(items) <= 10:
         await query.answer()
-        items_text = "\n".join([f"<code>{item}</code>" for item in items])
+        items_text = "\n\n".join([f"<code>{item}</code>" for item in items])
         text = f"""
 📋 CHI TIẾT ĐƠN HÀNG #{order_id}
 
@@ -683,7 +930,7 @@ async def show_order_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📝 Nội dung:
 {items_text}
 """
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=back_keyboard("history"))
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=delete_keyboard())
     else:
         # Nhiều items -> gửi file ngay
         await query.answer()
@@ -704,6 +951,9 @@ async def show_order_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    if not await is_feature_enabled("show_deposit"):
+        await query.edit_message_text("⚠️ Tính năng này đang tạm tắt.", reply_markup=delete_keyboard())
+        return
     
     text = """
 💰 NẠP TIỀN VÀO TÀI KHOẢN
@@ -711,10 +961,15 @@ async def show_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Chọn số tiền muốn nạp:
 """
     await query.edit_message_text(text, reply_markup=deposit_amounts_keyboard())
+    set_last_menu_message(context, query.message)
 
 async def process_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    if not await is_feature_enabled("show_deposit"):
+        await query.edit_message_text("⚠️ Tính năng này đang tạm tắt.", reply_markup=delete_keyboard())
+        return
+    clear_last_menu_message(context, query.message)
     
     amount = int(query.data.split("_")[1])
     user_id = query.from_user.id
@@ -722,17 +977,20 @@ async def process_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Generate unique code - SEVQR prefix required for VietinBank + SePay
     code = f"SEVQR NAP{user_id}{''.join(random.choices(string.digits, k=4))}"
     
-    # Save deposit request
-    await create_deposit(user_id, amount, code)
-    
-    # Ưu tiên SePay nếu có config, không thì dùng MoMo
-    if SEPAY_ACCOUNT_NUMBER:
+    # Save deposit + fetch bank settings in one round-trip (Supabase)
+    bank_settings = await create_deposit_with_settings(user_id, amount, code)
+
+    # Ưu tiên SePay nếu có config (DB hoặc .env), không thì dùng MoMo
+    bank_name = bank_settings['bank_name'] or SEPAY_BANK_NAME
+    account_number = bank_settings['account_number'] or SEPAY_ACCOUNT_NUMBER
+    account_name = bank_settings['account_name'] or SEPAY_ACCOUNT_NAME
+    if account_number:
         text = f"""
 💳 THÔNG TIN CHUYỂN KHOẢN
 
-🏦 Ngân hàng: <code>{SEPAY_BANK_NAME}</code>
-🔢 Số TK: <code>{SEPAY_ACCOUNT_NUMBER}</code>
-👤 Tên: <code>{SEPAY_ACCOUNT_NAME}</code>
+🏦 Ngân hàng: <code>{bank_name}</code>
+🔢 Số TK: <code>{account_number}</code>
+👤 Tên: <code>{account_name}</code>
 💰 Số tiền: <code>{amount:,}đ</code>
 📝 Nội dung: <code>{code}</code>
 
@@ -758,7 +1016,8 @@ async def process_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 ✅ Mã nạp tiền: {code}
 """
-    await query.edit_message_text(text, parse_mode="HTML", reply_markup=back_keyboard())
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=delete_keyboard())
+    mark_vietqr_message(query.message.chat_id, query.message.message_id)
 
 
 # ============ BINANCE PAY DEPOSIT ============
@@ -767,6 +1026,10 @@ async def handle_binance_deposit_text(update: Update, context: ContextTypes.DEFA
     """Handler khi user bấm nút Nạp Binance"""
     user_id = update.effective_user.id
     lang = await get_user_language(user_id)
+    if not await is_feature_enabled("show_usdt"):
+        await update.message.reply_text("⚠️ Tính năng này đang tạm tắt.", reply_markup=await get_user_keyboard(lang))
+        return ConversationHandler.END
+    await delete_last_menu_message(context, update.effective_chat.id)
     
     # Lấy Binance ID từ database
     from database import get_setting
@@ -791,9 +1054,12 @@ async def process_binance_amount(update: Update, context: ContextTypes.DEFAULT_T
     text_input = update.message.text.strip()
     user_id = update.effective_user.id
     lang = await get_user_language(user_id)
+    if not await is_feature_enabled("show_usdt"):
+        await update.message.reply_text("⚠️ Tính năng này đang tạm tắt.", reply_markup=await get_user_keyboard(lang))
+        return ConversationHandler.END
     
     if text_input in ["❌ Hủy", "❌ Cancel"]:
-        await update.message.reply_text(get_text(lang, "deposit_cancelled"), reply_markup=user_reply_keyboard(lang))
+        await update.message.reply_text(get_text(lang, "deposit_cancelled"), reply_markup=await get_user_keyboard(lang))
         return ConversationHandler.END
     
     try:
@@ -835,9 +1101,12 @@ async def process_binance_screenshot(update: Update, context: ContextTypes.DEFAU
     """Xử lý khi user gửi screenshot"""
     user_id = update.effective_user.id
     lang = await get_user_language(user_id)
+    if not await is_feature_enabled("show_usdt"):
+        await update.message.reply_text("⚠️ Tính năng này đang tạm tắt.", reply_markup=await get_user_keyboard(lang))
+        return ConversationHandler.END
     
     if update.message.text and update.message.text.strip() in ["❌ Hủy", "❌ Cancel"]:
-        await update.message.reply_text(get_text(lang, "deposit_cancelled"), reply_markup=user_reply_keyboard(lang))
+        await update.message.reply_text(get_text(lang, "deposit_cancelled"), reply_markup=await get_user_keyboard(lang))
         return ConversationHandler.END
     
     if not update.message.photo:
@@ -852,7 +1121,7 @@ async def process_binance_screenshot(update: Update, context: ContextTypes.DEFAU
     vnd_amount = context.user_data.get('binance_vnd')
     
     if not code:
-        await update.message.reply_text(get_text(lang, "error"), reply_markup=user_reply_keyboard(lang))
+        await update.message.reply_text(get_text(lang, "error"), reply_markup=await get_user_keyboard(lang))
         return ConversationHandler.END
     
     from database import update_binance_deposit_screenshot
@@ -877,7 +1146,7 @@ async def process_binance_screenshot(update: Update, context: ContextTypes.DEFAU
     
     await update.message.reply_text(
         get_text(lang, "binance_submitted").format(amount=usdt_amount, code=code),
-        reply_markup=user_reply_keyboard(lang)
+        reply_markup=await get_user_keyboard(lang)
     )
     
     context.user_data.pop('binance_deposit_code', None)
@@ -912,4 +1181,4 @@ async def handle_usdt_withdraw_text(update: Update, context: ContextTypes.DEFAUL
                 f"⚠️ Tối thiểu: 10 USDT\n"
                 f"🌐 Network: TRC20 / BEP20")
     
-    await update.message.reply_text(text, reply_markup=user_reply_keyboard(lang))
+    await update.message.reply_text(text, reply_markup=await get_user_keyboard(lang))

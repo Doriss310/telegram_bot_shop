@@ -1,7 +1,9 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from database import get_or_create_user, get_balance, get_products, get_user_orders, get_user_language, set_user_language
-from keyboards import user_reply_keyboard, products_keyboard
+from keyboards import products_keyboard
+from helpers.ui import get_user_keyboard, is_feature_enabled
+from helpers.menu import delete_last_menu_message, set_last_menu_message, clear_last_menu_message
 from locales import get_text
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -25,21 +27,30 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = get_text(lang, "welcome").format(name=user.first_name)
     select_text = get_text(lang, "select_product")
     
-    await update.message.reply_text(welcome_text, reply_markup=user_reply_keyboard(lang))
-    
+    await update.message.reply_text(welcome_text, reply_markup=await get_user_keyboard(lang))
+    if not await is_feature_enabled("show_shop"):
+        await update.message.reply_text("⚠️ Tính năng này đang tạm tắt.")
+        return
+
     products = await get_products()
-    await update.message.reply_text(select_text, reply_markup=products_keyboard(products, lang))
+    menu_msg = await update.message.reply_text(select_text, reply_markup=products_keyboard(products, lang))
+    set_last_menu_message(context, menu_msg)
 
 async def handle_change_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Hiện menu đổi ngôn ngữ"""
+    if not await is_feature_enabled("show_language"):
+        await update.message.reply_text("⚠️ Tính năng này đang tạm tắt.")
+        return
+    await delete_last_menu_message(context, update.effective_chat.id)
     keyboard = [
         [InlineKeyboardButton("🇻🇳 Tiếng Việt", callback_data="set_lang_vi")],
         [InlineKeyboardButton("🇬🇧 English", callback_data="set_lang_en")],
     ]
-    await update.message.reply_text(
+    menu_msg = await update.message.reply_text(
         "🌐 Chọn ngôn ngữ / Select language:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+    set_last_menu_message(context, menu_msg)
 
 async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Xử lý khi user chọn ngôn ngữ"""
@@ -59,22 +70,33 @@ async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(f"{lang_text}\n\n{welcome_text}")
     
     # Hiện danh sách sản phẩm với reply keyboard
-    products = await get_products()
     await context.bot.send_message(
         chat_id=query.message.chat_id,
         text=select_text,
-        reply_markup=user_reply_keyboard(lang)
+        reply_markup=await get_user_keyboard(lang)
     )
-    await context.bot.send_message(
+    if not await is_feature_enabled("show_shop"):
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="⚠️ Tính năng này đang tạm tắt."
+        )
+        return
+    products = await get_products()
+    menu_msg = await context.bot.send_message(
         chat_id=query.message.chat_id,
         text="👇",
         reply_markup=products_keyboard(products, lang)
     )
+    set_last_menu_message(context, menu_msg)
 
 async def handle_history_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Xử lý khi user bấm nút Lịch sử từ reply keyboard"""
     user_id = update.effective_user.id
     lang = await get_user_language(user_id)
+    if not await is_feature_enabled("show_history"):
+        await update.message.reply_text("⚠️ Tính năng này đang tạm tắt.", reply_markup=await get_user_keyboard(lang))
+        return
+    await delete_last_menu_message(context, update.effective_chat.id)
     orders = await get_user_orders(user_id)
     
     if not orders:
@@ -100,9 +122,10 @@ async def handle_history_text(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         keyboard.append([InlineKeyboardButton(f"#{order_id} {short_name} x{quantity} {price_str}", callback_data=f"order_detail_{order_id}")])
     
-    keyboard.append([InlineKeyboardButton(get_text(lang, "btn_back"), callback_data="back_main")])
+    keyboard.append([InlineKeyboardButton("🗑 Xóa", callback_data="delete_msg")])
     
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    menu_msg = await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    set_last_menu_message(context, menu_msg)
 
 async def handle_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Xử lý khi user bấm nút User ID từ reply keyboard"""
@@ -112,6 +135,10 @@ async def handle_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     lang = await get_user_language(user_id)
+    if not await is_feature_enabled("show_balance"):
+        await update.message.reply_text("⚠️ Tính năng này đang tạm tắt.", reply_markup=await get_user_keyboard(lang))
+        return
+    await delete_last_menu_message(context, update.effective_chat.id)
     balance = await get_balance(user_id)
     from database import get_balance_usdt, get_setting
     balance_usdt = await get_balance_usdt(user_id)
@@ -136,8 +163,22 @@ async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     lang = await get_user_language(user_id)
     
+    if not await is_feature_enabled("show_shop"):
+        await query.edit_message_text("⚠️ Tính năng này đang tạm tắt.")
+        return
     products = await get_products()
     await query.edit_message_text(
         get_text(lang, "select_product"),
         reply_markup=products_keyboard(products, lang)
     )
+    set_last_menu_message(context, query.message)
+
+async def delete_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    try:
+        await query.message.delete()
+    except Exception:
+        # Fallback if deletion is not allowed
+        await query.edit_message_text("✅ Đã xóa.")
+    clear_last_menu_message(context, query.message)

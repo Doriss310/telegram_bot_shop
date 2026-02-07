@@ -3,18 +3,6 @@ import json
 import os
 from datetime import datetime
 
-def _parse_bool(value, default=True):
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    text = str(value).strip().lower()
-    if text in ("0", "false", "off", "no"):
-        return False
-    if text in ("1", "true", "on", "yes"):
-        return True
-    return default
-
 DB_PATH = "data/shop.db"
 
 async def init_db():
@@ -47,8 +35,7 @@ async def init_db():
                 name TEXT NOT NULL,
                 price INTEGER NOT NULL,
                 price_usdt REAL DEFAULT 0,
-                description TEXT,
-                format_data TEXT
+                description TEXT
             )
         """)
         # Add price_usdt column if not exists (migration)
@@ -56,19 +43,6 @@ async def init_db():
             await db.execute("ALTER TABLE products ADD COLUMN price_usdt REAL DEFAULT 0")
         except:
             pass
-        # Add format_data column if not exists (migration)
-        try:
-            await db.execute("ALTER TABLE products ADD COLUMN format_data TEXT")
-        except:
-            pass
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS format_templates (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                pattern TEXT NOT NULL,
-                created_at TEXT
-            )
-        """)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS stock (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -116,20 +90,6 @@ async def init_db():
                 value TEXT
             )
         """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS telegram_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER NOT NULL,
-                message_id INTEGER NOT NULL,
-                direction TEXT NOT NULL,
-                message_type TEXT DEFAULT 'text',
-                text TEXT,
-                payload TEXT,
-                sent_at TEXT,
-                created_at TEXT,
-                UNIQUE(chat_id, message_id)
-            )
-        """)
         # Binance deposits table
         await db.execute("""
             CREATE TABLE IF NOT EXISTS binance_deposits (
@@ -155,59 +115,7 @@ async def init_db():
                 created_at TEXT
             )
         """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS direct_orders (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                product_id INTEGER,
-                quantity INTEGER DEFAULT 1,
-                unit_price INTEGER,
-                amount INTEGER,
-                code TEXT,
-                status TEXT DEFAULT 'pending',
-                created_at TEXT
-            )
-        """)
         await db.commit()
-
-
-async def log_telegram_message(
-    chat_id: int,
-    message_id: int,
-    direction: str,
-    message_type: str = "text",
-    text: str = None,
-    payload=None,
-    sent_at=None,
-):
-    """
-    SQLite fallback for chat history logging (used when Supabase is disabled).
-    Best-effort: errors are swallowed to avoid breaking the bot.
-    """
-    if not chat_id or not message_id:
-        return
-
-    try:
-        payload_text = json.dumps(payload, ensure_ascii=False) if payload is not None else None
-        sent_at_text = (
-            sent_at.isoformat()
-            if isinstance(sent_at, datetime)
-            else (str(sent_at) if sent_at else datetime.utcnow().isoformat())
-        )
-        created_at = datetime.utcnow().isoformat()
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                """
-                INSERT OR IGNORE INTO telegram_messages
-                (chat_id, message_id, direction, message_type, text, payload, sent_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (chat_id, message_id, str(direction), str(message_type), text, payload_text, sent_at_text, created_at),
-            )
-            await db.commit()
-    except Exception:
-        return
 
 # User functions
 async def get_or_create_user(user_id: int, username: str = None):
@@ -260,7 +168,7 @@ async def update_balance_usdt(user_id: int, amount: float):
 # Product functions
 async def get_products():
     async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute("SELECT id, name, price, description, price_usdt, format_data FROM products")
+        cursor = await db.execute("SELECT id, name, price, description, price_usdt FROM products")
         rows = await cursor.fetchall()
         products = []
         for row in rows:
@@ -270,39 +178,27 @@ async def get_products():
             stock_count = (await stock_cursor.fetchone())[0]
             products.append({
                 "id": row[0], "name": row[1], "price": row[2],
-                "description": row[3], "stock": stock_count, "price_usdt": row[4] or 0,
-                "format_data": row[5]
+                "description": row[3], "stock": stock_count, "price_usdt": row[4] or 0
             })
         return products
 
 async def get_product(product_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            "SELECT id, name, price, description, price_usdt, format_data FROM products WHERE id = ?",
-            (product_id,)
-        )
+        cursor = await db.execute("SELECT id, name, price, description, price_usdt FROM products WHERE id = ?", (product_id,))
         row = await cursor.fetchone()
         if row:
             stock_cursor = await db.execute(
                 "SELECT COUNT(*) FROM stock WHERE product_id = ? AND sold = 0", (row[0],)
             )
             stock_count = (await stock_cursor.fetchone())[0]
-            return {
-                "id": row[0],
-                "name": row[1],
-                "price": row[2],
-                "description": row[3],
-                "stock": stock_count,
-                "price_usdt": row[4] or 0,
-                "format_data": row[5],
-            }
+            return {"id": row[0], "name": row[1], "price": row[2], "description": row[3], "stock": stock_count, "price_usdt": row[4] or 0}
         return None
 
-async def add_product(name: str, price: int, description: str = "", price_usdt: float = 0, format_data: str = ""):
+async def add_product(name: str, price: int, description: str = "", price_usdt: float = 0):
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "INSERT INTO products (name, price, description, price_usdt, format_data) VALUES (?, ?, ?, ?, ?)",
-            (name, price, description, price_usdt, format_data)
+            "INSERT INTO products (name, price, description, price_usdt) VALUES (?, ?, ?, ?)",
+            (name, price, description, price_usdt)
         )
         await db.commit()
         return cursor.lastrowid
@@ -498,43 +394,12 @@ async def search_user_by_id(user_id: int):
         return await cursor.fetchone()
 
 # Deposit functions
-async def create_deposit_with_settings(user_id: int, amount: int, code: str):
-    await create_deposit(user_id, amount, code)
-    return await get_bank_settings()
-
 async def create_deposit(user_id: int, amount: int, code: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO deposits (user_id, amount, code, created_at) VALUES (?, ?, ?, ?)",
             (user_id, amount, code, datetime.now().isoformat())
         )
-    await db.commit()
-
-# Direct order functions
-async def create_direct_order_with_settings(user_id: int, product_id: int, quantity: int, unit_price: int, amount: int, code: str):
-    await create_direct_order(user_id, product_id, quantity, unit_price, amount, code)
-    return await get_bank_settings()
-
-async def create_direct_order(user_id: int, product_id: int, quantity: int, unit_price: int, amount: int, code: str):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            """INSERT INTO direct_orders (user_id, product_id, quantity, unit_price, amount, code, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (user_id, product_id, quantity, unit_price, amount, code, datetime.now().isoformat())
-        )
-        await db.commit()
-
-async def get_pending_direct_orders():
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            """SELECT id, user_id, product_id, quantity, unit_price, amount, code, created_at
-               FROM direct_orders WHERE status = 'pending'"""
-        )
-        return await cursor.fetchall()
-
-async def set_direct_order_status(order_id: int, status: str):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE direct_orders SET status = ? WHERE id = ?", (status, order_id))
         await db.commit()
 
 async def get_pending_deposits():
@@ -558,11 +423,6 @@ async def confirm_deposit(deposit_id: int):
 async def cancel_deposit(deposit_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE deposits SET status = 'cancelled' WHERE id = ?", (deposit_id,))
-        await db.commit()
-
-async def set_deposit_status(deposit_id: int, status: str):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE deposits SET status = ? WHERE id = ?", (status, deposit_id))
         await db.commit()
 
 # Stats
@@ -792,25 +652,3 @@ async def cancel_usdt_withdrawal(withdrawal_id: int):
             await db.commit()
             return row
         return None
-
-# SePay processed transactions
-async def is_processed_transaction(tx_id: str) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute("SELECT 1 FROM processed_transactions WHERE tx_id = ?", (tx_id,))
-        return await cursor.fetchone() is not None
-
-async def mark_processed_transaction(tx_id: str):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("INSERT INTO processed_transactions (tx_id) VALUES (?)", (tx_id,))
-        await db.commit()
-
-async def get_ui_flags():
-    return {
-        "show_shop": _parse_bool(await get_setting("show_shop", "true")),
-        "show_balance": _parse_bool(await get_setting("show_balance", "true")),
-        "show_deposit": _parse_bool(await get_setting("show_deposit", "true")),
-        "show_withdraw": _parse_bool(await get_setting("show_withdraw", "true")),
-        "show_usdt": _parse_bool(await get_setting("show_usdt", "true")),
-        "show_history": _parse_bool(await get_setting("show_history", "true")),
-        "show_language": _parse_bool(await get_setting("show_language", "true")),
-    }
