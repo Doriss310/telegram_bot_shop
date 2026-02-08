@@ -9,7 +9,16 @@ from telegram.ext import (
 from config import BOT_TOKEN
 from database import init_db, get_setting, log_telegram_message
 from handlers.chat_logger import log_incoming_message
-from handlers.start import start_command, back_to_main, handle_history_text, handle_balance, set_language, handle_change_language, delete_message
+from handlers.start import (
+    start_command,
+    back_to_main,
+    handle_history_text,
+    handle_balance,
+    handle_support_text,
+    set_language,
+    handle_change_language,
+    delete_message,
+)
 from handlers.shop import (
     show_shop, show_product, confirm_buy, show_account,
     show_history, show_deposit, process_deposit, handle_deposit_text,
@@ -288,6 +297,7 @@ def setup_bot():
     app.add_handler(MessageHandler(filters.Regex("^(📜 Lịch sử|📜 History)$"), handle_history_text))
     app.add_handler(MessageHandler(filters.Regex("^(💰 Số dư|💰 Balance)$"), handle_balance))
     app.add_handler(MessageHandler(filters.Regex("^(🛒 Danh mục|🛒 Shop)$"), handle_shop_text))
+    app.add_handler(MessageHandler(filters.Regex("^(💬 Hỗ trợ|💬 Support|🆘 Hỗ trợ|🆘 Support)$"), handle_support_text))
     app.add_handler(MessageHandler(filters.Regex("^(🌐 Ngôn ngữ|🌐 Language)$"), handle_change_language))
     
     # Handler nhập số lượng mua (chỉ số)
@@ -306,7 +316,7 @@ def setup_bot():
     app.add_handler(CallbackQueryHandler(set_language, pattern="^set_lang_(vi|en)$"))
     app.add_handler(CallbackQueryHandler(delete_message, pattern="^delete_msg$"))
     app.add_handler(CallbackQueryHandler(back_to_main, pattern="^back_main$"))
-    app.add_handler(CallbackQueryHandler(show_shop, pattern="^shop$"))
+    app.add_handler(CallbackQueryHandler(show_shop, pattern="^shop(?:_\\d+)?$"))
     app.add_handler(CallbackQueryHandler(show_product, pattern="^buy_\\d+$"))
     app.add_handler(CallbackQueryHandler(select_payment_vnd, pattern="^pay_vnd_\\d+$"))
     app.add_handler(CallbackQueryHandler(select_payment_usdt, pattern="^pay_usdt_\\d+$"))

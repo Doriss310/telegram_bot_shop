@@ -16,6 +16,9 @@ create table if not exists public.products (
   name text not null,
   price bigint not null,
   price_usdt numeric default 0,
+  price_tiers jsonb,
+  promo_buy_quantity integer default 0,
+  promo_bonus_quantity integer default 0,
   description text,
   format_data text
 );
@@ -102,6 +105,7 @@ create table if not exists public.direct_orders (
   user_id bigint references public.users(user_id),
   product_id bigint references public.products(id),
   quantity integer default 1,
+  bonus_quantity integer default 0,
   unit_price bigint,
   amount bigint,
   code text,
@@ -110,6 +114,12 @@ create table if not exists public.direct_orders (
 );
 create index if not exists direct_orders_status_idx on public.direct_orders (status);
 create index if not exists direct_orders_code_idx on public.direct_orders (code);
+
+-- Backward-compatible column migrations
+alter table public.products add column if not exists price_tiers jsonb;
+alter table public.products add column if not exists promo_buy_quantity integer default 0;
+alter table public.products add column if not exists promo_bonus_quantity integer default 0;
+alter table public.direct_orders add column if not exists bonus_quantity integer default 0;
 
 create table if not exists public.processed_transactions (
   tx_id text primary key,
@@ -206,6 +216,9 @@ returns table (
   name text,
   price bigint,
   price_usdt numeric,
+  price_tiers jsonb,
+  promo_buy_quantity integer,
+  promo_bonus_quantity integer,
   description text,
   format_data text,
   stock bigint
@@ -220,6 +233,9 @@ as $$
     p.name,
     p.price,
     p.price_usdt,
+    p.price_tiers,
+    p.promo_buy_quantity,
+    p.promo_bonus_quantity,
     p.description,
     p.format_data,
     coalesce(s.stock, 0) as stock
@@ -240,6 +256,9 @@ returns table (
   name text,
   price bigint,
   price_usdt numeric,
+  price_tiers jsonb,
+  promo_buy_quantity integer,
+  promo_bonus_quantity integer,
   description text,
   format_data text,
   stock bigint
@@ -254,6 +273,9 @@ as $$
     p.name,
     p.price,
     p.price_usdt,
+    p.price_tiers,
+    p.promo_buy_quantity,
+    p.promo_bonus_quantity,
     p.description,
     p.format_data,
     coalesce(s.stock, 0) as stock
@@ -305,6 +327,7 @@ create or replace function public.create_direct_order_and_get_bank_settings(
   p_user_id bigint,
   p_product_id bigint,
   p_quantity integer,
+  p_bonus_quantity integer,
   p_unit_price bigint,
   p_amount bigint,
   p_code text
@@ -323,8 +346,8 @@ begin
     raise exception 'not authorized';
   end if;
 
-  insert into public.direct_orders (user_id, product_id, quantity, unit_price, amount, code, created_at)
-  values (p_user_id, p_product_id, p_quantity, p_unit_price, p_amount, p_code, now());
+  insert into public.direct_orders (user_id, product_id, quantity, bonus_quantity, unit_price, amount, code, created_at)
+  values (p_user_id, p_product_id, p_quantity, p_bonus_quantity, p_unit_price, p_amount, p_code, now());
 
   return query
   select

@@ -15,6 +15,16 @@ def _parse_bool(value, default=True):
         return True
     return default
 
+
+def _parse_json_list(value):
+    if not value:
+        return []
+    try:
+        data = json.loads(value)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
 DB_PATH = "data/shop.db"
 
 async def init_db():
@@ -47,6 +57,9 @@ async def init_db():
                 name TEXT NOT NULL,
                 price INTEGER NOT NULL,
                 price_usdt REAL DEFAULT 0,
+                price_tiers TEXT,
+                promo_buy_quantity INTEGER DEFAULT 0,
+                promo_bonus_quantity INTEGER DEFAULT 0,
                 description TEXT,
                 format_data TEXT
             )
@@ -59,6 +72,19 @@ async def init_db():
         # Add format_data column if not exists (migration)
         try:
             await db.execute("ALTER TABLE products ADD COLUMN format_data TEXT")
+        except:
+            pass
+        # Add quantity pricing / promotion columns if not exists (migration)
+        try:
+            await db.execute("ALTER TABLE products ADD COLUMN price_tiers TEXT")
+        except:
+            pass
+        try:
+            await db.execute("ALTER TABLE products ADD COLUMN promo_buy_quantity INTEGER DEFAULT 0")
+        except:
+            pass
+        try:
+            await db.execute("ALTER TABLE products ADD COLUMN promo_bonus_quantity INTEGER DEFAULT 0")
         except:
             pass
         await db.execute("""
@@ -161,6 +187,7 @@ async def init_db():
                 user_id INTEGER,
                 product_id INTEGER,
                 quantity INTEGER DEFAULT 1,
+                bonus_quantity INTEGER DEFAULT 0,
                 unit_price INTEGER,
                 amount INTEGER,
                 code TEXT,
@@ -168,6 +195,10 @@ async def init_db():
                 created_at TEXT
             )
         """)
+        try:
+            await db.execute("ALTER TABLE direct_orders ADD COLUMN bonus_quantity INTEGER DEFAULT 0")
+        except:
+            pass
         await db.commit()
 
 
@@ -260,7 +291,9 @@ async def update_balance_usdt(user_id: int, amount: float):
 # Product functions
 async def get_products():
     async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute("SELECT id, name, price, description, price_usdt, format_data FROM products")
+        cursor = await db.execute(
+            "SELECT id, name, price, description, price_usdt, format_data, price_tiers, promo_buy_quantity, promo_bonus_quantity FROM products"
+        )
         rows = await cursor.fetchall()
         products = []
         for row in rows:
@@ -271,14 +304,17 @@ async def get_products():
             products.append({
                 "id": row[0], "name": row[1], "price": row[2],
                 "description": row[3], "stock": stock_count, "price_usdt": row[4] or 0,
-                "format_data": row[5]
+                "format_data": row[5],
+                "price_tiers": _parse_json_list(row[6]),
+                "promo_buy_quantity": row[7] or 0,
+                "promo_bonus_quantity": row[8] or 0,
             })
         return products
 
 async def get_product(product_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "SELECT id, name, price, description, price_usdt, format_data FROM products WHERE id = ?",
+            "SELECT id, name, price, description, price_usdt, format_data, price_tiers, promo_buy_quantity, promo_bonus_quantity FROM products WHERE id = ?",
             (product_id,)
         )
         row = await cursor.fetchone()
@@ -295,14 +331,39 @@ async def get_product(product_id: int):
                 "stock": stock_count,
                 "price_usdt": row[4] or 0,
                 "format_data": row[5],
+                "price_tiers": _parse_json_list(row[6]),
+                "promo_buy_quantity": row[7] or 0,
+                "promo_bonus_quantity": row[8] or 0,
             }
         return None
 
-async def add_product(name: str, price: int, description: str = "", price_usdt: float = 0, format_data: str = ""):
+async def add_product(
+    name: str,
+    price: int,
+    description: str = "",
+    price_usdt: float = 0,
+    format_data: str = "",
+    price_tiers=None,
+    promo_buy_quantity: int = 0,
+    promo_bonus_quantity: int = 0,
+):
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "INSERT INTO products (name, price, description, price_usdt, format_data) VALUES (?, ?, ?, ?, ?)",
-            (name, price, description, price_usdt, format_data)
+            """
+            INSERT INTO products
+            (name, price, description, price_usdt, format_data, price_tiers, promo_buy_quantity, promo_bonus_quantity)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                name,
+                price,
+                description,
+                price_usdt,
+                format_data,
+                json.dumps(price_tiers) if price_tiers else None,
+                promo_buy_quantity,
+                promo_bonus_quantity,
+            ),
         )
         await db.commit()
         return cursor.lastrowid
@@ -419,15 +480,25 @@ async def export_stock(product_id: int, only_unsold: bool = True):
         await db.commit()
 
 # Order functions
-async def create_order_bulk(user_id: int, product_id: int, contents: list, price_per_item: int, order_group: str):
+async def create_order_bulk(
+    user_id: int,
+    product_id: int,
+    contents: list,
+    price_per_item: int,
+    order_group: str,
+    total_price: int = None,
+    quantity: int = None,
+):
     """Tạo đơn hàng với nhiều items cùng lúc"""
     async with aiosqlite.connect(DB_PATH) as db:
         created_at = datetime.now().isoformat()
+        final_quantity = quantity if quantity is not None else len(contents)
+        final_total = total_price if total_price is not None else price_per_item * len(contents)
         # Lưu tất cả items vào 1 record với content là JSON
         import json
         await db.execute(
             "INSERT INTO orders (user_id, product_id, content, price, quantity, order_group, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (user_id, product_id, json.dumps(contents), price_per_item * len(contents), len(contents), order_group, created_at)
+            (user_id, product_id, json.dumps(contents), int(final_total), int(final_quantity), order_group, created_at)
         )
         await db.commit()
 
@@ -511,23 +582,39 @@ async def create_deposit(user_id: int, amount: int, code: str):
     await db.commit()
 
 # Direct order functions
-async def create_direct_order_with_settings(user_id: int, product_id: int, quantity: int, unit_price: int, amount: int, code: str):
-    await create_direct_order(user_id, product_id, quantity, unit_price, amount, code)
+async def create_direct_order_with_settings(
+    user_id: int,
+    product_id: int,
+    quantity: int,
+    unit_price: int,
+    amount: int,
+    code: str,
+    bonus_quantity: int = 0,
+):
+    await create_direct_order(user_id, product_id, quantity, unit_price, amount, code, bonus_quantity=bonus_quantity)
     return await get_bank_settings()
 
-async def create_direct_order(user_id: int, product_id: int, quantity: int, unit_price: int, amount: int, code: str):
+async def create_direct_order(
+    user_id: int,
+    product_id: int,
+    quantity: int,
+    unit_price: int,
+    amount: int,
+    code: str,
+    bonus_quantity: int = 0,
+):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            """INSERT INTO direct_orders (user_id, product_id, quantity, unit_price, amount, code, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (user_id, product_id, quantity, unit_price, amount, code, datetime.now().isoformat())
+            """INSERT INTO direct_orders (user_id, product_id, quantity, bonus_quantity, unit_price, amount, code, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, product_id, quantity, bonus_quantity, unit_price, amount, code, datetime.now().isoformat())
         )
         await db.commit()
 
 async def get_pending_direct_orders():
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            """SELECT id, user_id, product_id, quantity, unit_price, amount, code, created_at
+            """SELECT id, user_id, product_id, quantity, bonus_quantity, unit_price, amount, code, created_at
                FROM direct_orders WHERE status = 'pending'"""
         )
         return await cursor.fetchall()
@@ -813,4 +900,5 @@ async def get_ui_flags():
         "show_usdt": _parse_bool(await get_setting("show_usdt", "true")),
         "show_history": _parse_bool(await get_setting("show_history", "true")),
         "show_language": _parse_bool(await get_setting("show_language", "true")),
+        "show_support": _parse_bool(await get_setting("show_support", "true")),
     }

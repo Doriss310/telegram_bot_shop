@@ -1,15 +1,27 @@
 ﻿from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+import math
+
+
+def _format_vnd_dot(amount) -> str:
+    try:
+        value = int(amount or 0)
+    except (TypeError, ValueError):
+        value = 0
+    return f"{value:,}".replace(",", ".")
 
 def user_reply_keyboard(lang: str = 'vi', flags: dict | None = None):
     flags = flags or {}
     def enabled(key: str, default: bool = True) -> bool:
         return bool(flags.get(key, default))
 
-    def build_rows(buttons: list[str]) -> list[list[KeyboardButton]]:
+    def build_rows(buttons: list[str | KeyboardButton]) -> list[list[KeyboardButton]]:
         rows: list[list[KeyboardButton]] = []
         row: list[KeyboardButton] = []
         for label in buttons:
-            row.append(KeyboardButton(label))
+            if isinstance(label, KeyboardButton):
+                row.append(label)
+            else:
+                row.append(KeyboardButton(label))
             if len(row) == 2:
                 rows.append(row)
                 row = []
@@ -19,7 +31,7 @@ def user_reply_keyboard(lang: str = 'vi', flags: dict | None = None):
 
     if lang == 'en':
         # English: Only Binance deposit (foreigners can't use SePay)
-        buttons: list[str] = []
+        buttons: list[str | KeyboardButton] = []
         if enabled("show_shop"):
             buttons.append("🛒 Shop")
         if enabled("show_balance"):
@@ -28,12 +40,14 @@ def user_reply_keyboard(lang: str = 'vi', flags: dict | None = None):
             buttons.append("🔶 Deposit")
         if enabled("show_history"):
             buttons.append("📜 History")
+        if enabled("show_support"):
+            buttons.append("💬 Support")
         if enabled("show_language"):
             buttons.append("🌐 Language")
         keyboard = build_rows(buttons)
     else:
         # Vietnamese: Both SePay (VND) and Binance (USDT)
-        buttons = []
+        buttons: list[str | KeyboardButton] = []
         if enabled("show_shop"):
             buttons.append("🛒 Danh mục")
         if enabled("show_balance"):
@@ -46,6 +60,8 @@ def user_reply_keyboard(lang: str = 'vi', flags: dict | None = None):
             buttons.append("💵 Nạp USDT")
         if enabled("show_history"):
             buttons.append("📜 Lịch sử")
+        if enabled("show_support"):
+            buttons.append("💬 Hỗ trợ")
         if enabled("show_language"):
             buttons.append("🌐 Ngôn ngữ")
         keyboard = build_rows(buttons)
@@ -90,26 +106,46 @@ def admin_sold_codes_keyboard(products):
     keyboard.append([InlineKeyboardButton("🔙 Quay lại", callback_data="admin")])
     return InlineKeyboardMarkup(keyboard)
 
-def products_keyboard(products, lang: str = 'vi'):
+def products_keyboard(products, lang: str = 'vi', page: int = 0, page_size: int = 10):
     keyboard = []
-    for p in products:
+    total_products = len(products or [])
+    total_pages = max(1, math.ceil(total_products / max(1, page_size)))
+    safe_page = max(0, min(page, total_pages - 1))
+
+    start = safe_page * page_size
+    end = start + page_size
+    page_products = (products or [])[start:end]
+
+    for p in page_products:
         if lang == 'en':
             # English: show USDT price only
-            status = f"in stock {p['stock']}" if p['stock'] > 0 else "out of stock"
+            stock_text = f"📦 {p['stock']}" if p['stock'] > 0 else "❌ out"
             if p.get('price_usdt') and p['price_usdt'] > 0:
                 price_text = f"{p['price_usdt']} USDT"
             else:
                 price_text = "N/A"
+            label = f"{p['name']} | {price_text} | {stock_text}"
         else:
             # Vietnamese: show VND price (USDT option available when buying)
-            status = f"còn {p['stock']}" if p['stock'] > 0 else "hết hàng"
-            price_text = f"{p['price']:,}đ"
+            stock_text = f"📦 {p['stock']}" if p['stock'] > 0 else "❌ Hết"
+            price_text = f"{_format_vnd_dot(p.get('price'))} đ"
+            label = f"{p['name']} | {price_text} | {stock_text}"
+        keyboard.append([InlineKeyboardButton(label, callback_data=f"buy_{p['id']}")])
+
+    if total_pages > 1:
+        prev_text = "⬅️ Prev" if lang == "en" else "⬅️ Trước"
+        next_text = "Next ➡️" if lang == "en" else "Sau ➡️"
+        prev_page = safe_page - 1 if safe_page > 0 else safe_page
+        next_page = safe_page + 1 if safe_page < total_pages - 1 else safe_page
         keyboard.append([
-            InlineKeyboardButton(f"{p['name']} - {price_text} ({status})", callback_data=f"buy_{p['id']}")
+            InlineKeyboardButton(prev_text, callback_data=f"shop_{prev_page}"),
+            InlineKeyboardButton(f"{safe_page + 1}/{total_pages}", callback_data=f"shop_{safe_page}"),
+            InlineKeyboardButton(next_text, callback_data=f"shop_{next_page}"),
         ])
-    refresh_text = "🔄 Refresh" if lang == 'en' else "🔄 Làm mới"
+
+    refresh_text = "🔄 Refresh" if lang == 'en' else "🔄 Cập nhật"
     delete_text = "🗑 Delete" if lang == 'en' else "🗑 Xóa"
-    keyboard.append([InlineKeyboardButton(refresh_text, callback_data="shop")])
+    keyboard.append([InlineKeyboardButton(refresh_text, callback_data=f"shop_{safe_page}")])
     keyboard.append([InlineKeyboardButton(delete_text, callback_data="delete_msg")])
     return InlineKeyboardMarkup(keyboard)
 

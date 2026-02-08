@@ -16,6 +16,18 @@ SEPAY_DEBUG = os.getenv("SEPAY_DEBUG", "").lower() in ("1", "true", "yes")
 SEPAY_LIMIT = os.getenv("SEPAY_LIMIT", "").strip()
 SEPAY_FROM_DATE = os.getenv("SEPAY_FROM_DATE", "").strip()
 SEPAY_TO_DATE = os.getenv("SEPAY_TO_DATE", "").strip()
+
+
+def _env_positive_int(name: str, default: int) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        return max(1, int(str(raw).strip()))
+    except (TypeError, ValueError):
+        return default
+
+
+DIRECT_ORDER_PENDING_EXPIRE_MINUTES = _env_positive_int("DIRECT_ORDER_PENDING_EXPIRE_MINUTES", 10)
+DIRECT_ORDER_PENDING_EXPIRE_SECONDS = DIRECT_ORDER_PENDING_EXPIRE_MINUTES * 60
 logger = logging.getLogger(__name__)
 
 if USE_SUPABASE:
@@ -143,12 +155,56 @@ def _pick_tx_id(tx: dict) -> str:
             return str(val)
     return ""
 
+
+def _parse_created_at(value: str | None):
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _is_direct_order_expired(created_at: str | None) -> bool:
+    parsed = _parse_created_at(created_at)
+    if not parsed:
+        return False
+    now_dt = datetime.now(parsed.tzinfo) if parsed.tzinfo else datetime.now()
+    return (now_dt - parsed).total_seconds() >= DIRECT_ORDER_PENDING_EXPIRE_SECONDS
+
+
+async def _auto_cancel_expired_direct_orders(pending_direct_orders, bot_app=None):
+    active_orders = []
+    for order in pending_direct_orders:
+        order_id, user_id, _product_id, _quantity, _bonus_quantity, _unit_price, _expected_amount, _code, created_at = order
+        if not _is_direct_order_expired(created_at):
+            active_orders.append(order)
+            continue
+
+        await set_direct_order_status(order_id, "cancelled")
+        logger.info("⏱️ Auto-cancel direct order #%s after %sm pending.", order_id, DIRECT_ORDER_PENDING_EXPIRE_MINUTES)
+        if bot_app:
+            try:
+                await bot_app.bot.send_message(
+                    user_id,
+                    f"⌛ Đơn thanh toán #{order_id} đã hết hạn sau {DIRECT_ORDER_PENDING_EXPIRE_MINUTES} phút và đã tự hủy."
+                )
+            except Exception:
+                pass
+    return active_orders
+
 async def process_transactions(bot_app=None):
     """Xử lý giao dịch và cộng tiền tự động"""
     transactions = await get_recent_transactions()
     if USE_SUPABASE:
         pending_deposits = await get_pending_deposits()
         pending_direct_orders = await get_pending_direct_orders()
+        pending_direct_orders = await _auto_cancel_expired_direct_orders(pending_direct_orders, bot_app)
         if SEPAY_DEBUG:
             logger.info("Pending deposits: %s | pending direct orders: %s", len(pending_deposits), len(pending_direct_orders))
         for tx in transactions:
@@ -200,13 +256,14 @@ async def process_transactions(bot_app=None):
                 continue
 
             for order in pending_direct_orders:
-                order_id, user_id, product_id, quantity, unit_price, expected_amount, code, _created_at = order
+                order_id, user_id, product_id, quantity, bonus_quantity, unit_price, expected_amount, code, _created_at = order
                 code_upper = code.upper()
                 code_norm = _normalize_content(code)
                 if (code_upper in content_upper or code_norm in content_norm) and amount >= expected_amount:
                     # Fulfill direct order
-                    stocks = await get_available_stock_batch(product_id, quantity)
-                    if not stocks or len(stocks) < quantity:
+                    deliver_quantity = max(1, int(quantity) + max(0, int(bonus_quantity or 0)))
+                    stocks = await get_available_stock_batch(product_id, deliver_quantity)
+                    if not stocks or len(stocks) < deliver_quantity:
                         await set_direct_order_status(order_id, "failed")
                         if bot_app:
                             await bot_app.bot.send_message(
@@ -222,7 +279,15 @@ async def process_transactions(bot_app=None):
                     await mark_stock_sold_batch(stock_ids)
 
                     order_group = f"PAY{user_id}{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                    await create_order_bulk(user_id, product_id, purchased_items, unit_price, order_group)
+                    await create_order_bulk(
+                        user_id,
+                        product_id,
+                        purchased_items,
+                        unit_price,
+                        order_group,
+                        total_price=expected_amount,
+                        quantity=len(purchased_items),
+                    )
                     await set_direct_order_status(order_id, "confirmed")
                     await mark_processed_transaction(tx_id)
 
@@ -235,8 +300,11 @@ async def process_transactions(bot_app=None):
                         header_lines = [
                             f"Product: {product_name}",
                             f"Qty: {len(purchased_items)}",
+                            f"Paid Qty: {quantity}",
                             f"Total: {total_text}",
                         ]
+                        if bonus_quantity:
+                            header_lines.append(f"Bonus: {bonus_quantity}")
                         if description:
                             header_lines.append(f"Description: {description}")
                         header = "\n".join(header_lines)
@@ -249,6 +317,8 @@ async def process_transactions(bot_app=None):
                             f"🧾 {product_name} | SL: {len(purchased_items)}\n"
                             f"💰 Tổng: {total_text}"
                         )
+                        if bonus_quantity:
+                            success_text += f"\n🎁 Tặng thêm: {bonus_quantity}"
                         description_block = format_description_block(description)
                         if len(purchased_items) > 5:
                             msg = await bot_app.bot.send_document(
@@ -273,6 +343,29 @@ async def process_transactions(bot_app=None):
         return
 
     async with aiosqlite.connect(DB_PATH) as db:
+        # Auto-cancel stale direct orders in sqlite mode as well.
+        cursor = await db.execute(
+            "SELECT id, user_id, created_at FROM direct_orders WHERE status = 'pending'"
+        )
+        sqlite_pending_direct_orders = await cursor.fetchall()
+        for order_id, user_id, created_at in sqlite_pending_direct_orders:
+            if not _is_direct_order_expired(created_at):
+                continue
+            await db.execute(
+                "UPDATE direct_orders SET status = 'cancelled' WHERE id = ?",
+                (order_id,)
+            )
+            logger.info("⏱️ Auto-cancel direct order #%s after %sm pending. (sqlite)", order_id, DIRECT_ORDER_PENDING_EXPIRE_MINUTES)
+            if bot_app:
+                try:
+                    await bot_app.bot.send_message(
+                        user_id,
+                        f"⌛ Đơn thanh toán #{order_id} đã hết hạn sau {DIRECT_ORDER_PENDING_EXPIRE_MINUTES} phút và đã tự hủy."
+                    )
+                except Exception:
+                    pass
+        await db.commit()
+
         # Lấy pending deposits
         cursor = await db.execute(
             "SELECT id, user_id, amount, code FROM deposits WHERE status = 'pending'"

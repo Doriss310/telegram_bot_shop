@@ -29,6 +29,18 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _safe_list(value: Any) -> List[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, list) else []
+        except Exception:
+            return []
+    return []
+
+
 async def _to_thread(func, *args, **kwargs):
     return await asyncio.to_thread(func, *args, **kwargs)
 
@@ -248,13 +260,23 @@ async def get_products():
                 "stock": _safe_int(row.get("stock")),
                 "price_usdt": _safe_float(row.get("price_usdt")),
                 "format_data": row.get("format_data"),
+                "price_tiers": _safe_list(row.get("price_tiers")),
+                "promo_buy_quantity": _safe_int(row.get("promo_buy_quantity")),
+                "promo_bonus_quantity": _safe_int(row.get("promo_bonus_quantity")),
             }
             for row in rows
         ]
     except Exception:
         # Fallback to per-product counting if RPC not available
         def _fetch():
-            return _get_table("products").select("id, name, price, description, price_usdt, format_data").order("id").execute()
+            try:
+                return _get_table("products").select(
+                    "id, name, price, description, price_usdt, format_data, price_tiers, promo_buy_quantity, promo_bonus_quantity"
+                ).order("id").execute()
+            except Exception:
+                return _get_table("products").select(
+                    "id, name, price, description, price_usdt, format_data"
+                ).order("id").execute()
 
         resp = await _to_thread(_fetch)
         rows = resp.data or []
@@ -275,6 +297,9 @@ async def get_products():
                 "stock": stock_count,
                 "price_usdt": _safe_float(row.get("price_usdt")),
                 "format_data": row.get("format_data"),
+                "price_tiers": _safe_list(row.get("price_tiers")),
+                "promo_buy_quantity": _safe_int(row.get("promo_buy_quantity")),
+                "promo_bonus_quantity": _safe_int(row.get("promo_bonus_quantity")),
             })
         return products
 
@@ -297,12 +322,22 @@ async def get_product(product_id: int):
             "stock": _safe_int(row.get("stock")),
             "price_usdt": _safe_float(row.get("price_usdt")),
             "format_data": row.get("format_data"),
+            "price_tiers": _safe_list(row.get("price_tiers")),
+            "promo_buy_quantity": _safe_int(row.get("promo_buy_quantity")),
+            "promo_bonus_quantity": _safe_int(row.get("promo_bonus_quantity")),
         }
     except Exception:
         def _fetch():
-            return _get_table("products").select("id, name, price, description, price_usdt, format_data").eq(
-                "id", product_id
-            ).limit(1).execute()
+            try:
+                return _get_table("products").select(
+                    "id, name, price, description, price_usdt, format_data, price_tiers, promo_buy_quantity, promo_bonus_quantity"
+                ).eq(
+                    "id", product_id
+                ).limit(1).execute()
+            except Exception:
+                return _get_table("products").select(
+                    "id, name, price, description, price_usdt, format_data"
+                ).eq("id", product_id).limit(1).execute()
 
         resp = await _to_thread(_fetch)
         data = resp.data or []
@@ -323,18 +358,44 @@ async def get_product(product_id: int):
             "stock": stock_count,
             "price_usdt": _safe_float(row.get("price_usdt")),
             "format_data": row.get("format_data"),
+            "price_tiers": _safe_list(row.get("price_tiers")),
+            "promo_buy_quantity": _safe_int(row.get("promo_buy_quantity")),
+            "promo_bonus_quantity": _safe_int(row.get("promo_bonus_quantity")),
         }
 
 
-async def add_product(name: str, price: int, description: str = "", price_usdt: float = 0, format_data: str = ""):
+async def add_product(
+    name: str,
+    price: int,
+    description: str = "",
+    price_usdt: float = 0,
+    format_data: str = "",
+    price_tiers=None,
+    promo_buy_quantity: int = 0,
+    promo_bonus_quantity: int = 0,
+):
     def _insert():
-        return _get_table("products").insert({
+        payload = {
             "name": name,
             "price": price,
             "description": description,
             "price_usdt": price_usdt,
             "format_data": format_data,
-        }).execute()
+            "price_tiers": price_tiers if price_tiers else None,
+            "promo_buy_quantity": promo_buy_quantity,
+            "promo_bonus_quantity": promo_bonus_quantity,
+        }
+        try:
+            return _get_table("products").insert(payload).execute()
+        except Exception:
+            legacy_payload = {
+                "name": name,
+                "price": price,
+                "description": description,
+                "price_usdt": price_usdt,
+                "format_data": format_data,
+            }
+            return _get_table("products").insert(legacy_payload).execute()
 
     resp = await _to_thread(_insert)
     data = resp.data or []
@@ -479,14 +540,25 @@ async def export_stock(product_id: int, only_unsold: bool = True):
 
 
 # Order functions
-async def create_order_bulk(user_id: int, product_id: int, contents: list, price_per_item: int, order_group: str):
+async def create_order_bulk(
+    user_id: int,
+    product_id: int,
+    contents: list,
+    price_per_item: int,
+    order_group: str,
+    total_price: int = None,
+    quantity: int = None,
+):
+    final_quantity = quantity if quantity is not None else len(contents)
+    final_total = total_price if total_price is not None else price_per_item * len(contents)
+
     def _insert():
         return _get_table("orders").insert({
             "user_id": user_id,
             "product_id": product_id,
             "content": json.dumps(contents),
-            "price": price_per_item * len(contents),
-            "quantity": len(contents),
+            "price": int(final_total),
+            "quantity": int(final_quantity),
             "order_group": order_group,
             "created_at": _now_iso(),
         }).execute()
@@ -660,7 +732,15 @@ async def create_deposit(user_id: int, amount: int, code: str):
 
 
 # Direct order functions
-async def create_direct_order_with_settings(user_id: int, product_id: int, quantity: int, unit_price: int, amount: int, code: str):
+async def create_direct_order_with_settings(
+    user_id: int,
+    product_id: int,
+    quantity: int,
+    unit_price: int,
+    amount: int,
+    code: str,
+    bonus_quantity: int = 0,
+):
     def _rpc():
         return get_supabase_client().rpc(
             "create_direct_order_and_get_bank_settings",
@@ -668,6 +748,7 @@ async def create_direct_order_with_settings(user_id: int, product_id: int, quant
                 "p_user_id": user_id,
                 "p_product_id": product_id,
                 "p_quantity": quantity,
+                "p_bonus_quantity": bonus_quantity,
                 "p_unit_price": unit_price,
                 "p_amount": amount,
                 "p_code": code,
@@ -688,30 +769,65 @@ async def create_direct_order_with_settings(user_id: int, product_id: int, quant
     except Exception:
         pass
 
-    await create_direct_order(user_id, product_id, quantity, unit_price, amount, code)
+    await create_direct_order(
+        user_id,
+        product_id,
+        quantity,
+        unit_price,
+        amount,
+        code,
+        bonus_quantity=bonus_quantity,
+    )
     return await get_bank_settings()
 
 
-async def create_direct_order(user_id: int, product_id: int, quantity: int, unit_price: int, amount: int, code: str):
+async def create_direct_order(
+    user_id: int,
+    product_id: int,
+    quantity: int,
+    unit_price: int,
+    amount: int,
+    code: str,
+    bonus_quantity: int = 0,
+):
     def _insert():
-        return _get_table("direct_orders").insert({
+        payload = {
             "user_id": user_id,
             "product_id": product_id,
             "quantity": quantity,
+            "bonus_quantity": bonus_quantity,
             "unit_price": unit_price,
             "amount": amount,
             "code": code,
             "created_at": _now_iso(),
-        }).execute()
+        }
+        try:
+            return _get_table("direct_orders").insert(payload).execute()
+        except Exception:
+            legacy_payload = {
+                "user_id": user_id,
+                "product_id": product_id,
+                "quantity": quantity,
+                "unit_price": unit_price,
+                "amount": amount,
+                "code": code,
+                "created_at": _now_iso(),
+            }
+            return _get_table("direct_orders").insert(legacy_payload).execute()
 
     await _to_thread(_insert)
 
 
 async def get_pending_direct_orders():
     def _fetch():
-        return _get_table("direct_orders").select(
-            "id, user_id, product_id, quantity, unit_price, amount, code, created_at"
-        ).eq("status", "pending").execute()
+        try:
+            return _get_table("direct_orders").select(
+                "id, user_id, product_id, quantity, bonus_quantity, unit_price, amount, code, created_at"
+            ).eq("status", "pending").execute()
+        except Exception:
+            return _get_table("direct_orders").select(
+                "id, user_id, product_id, quantity, unit_price, amount, code, created_at"
+            ).eq("status", "pending").execute()
 
     resp = await _to_thread(_fetch)
     rows = resp.data or []
@@ -721,6 +837,7 @@ async def get_pending_direct_orders():
             row.get("user_id"),
             row.get("product_id"),
             _safe_int(row.get("quantity"), 1),
+            _safe_int(row.get("bonus_quantity"), 0),
             _safe_int(row.get("unit_price")),
             _safe_int(row.get("amount")),
             row.get("code"),
@@ -979,6 +1096,7 @@ async def get_ui_flags() -> Dict[str, bool]:
         "show_usdt": _parse_bool(await get_setting("show_usdt", "true")),
         "show_history": _parse_bool(await get_setting("show_history", "true")),
         "show_language": _parse_bool(await get_setting("show_language", "true")),
+        "show_support": _parse_bool(await get_setting("show_support", "true")),
     }
 
 

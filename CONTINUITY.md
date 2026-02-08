@@ -1,72 +1,221 @@
-Goal: Improve Admin Dashboard (Dashboard Vietnamese + Latest Orders improvements + Stock bulk ops + Admin 1-1 chat with Telegram users).
+Goal: Improve Admin Dashboard and sales operations, including dynamic pricing/promotions, support-contact UX, and configurable product list pagination:
+- Completed scope: Dashboard/Stocks/Users enhancements, chat, direct-order timeout, reports cards, stock counters.
+- New scope: Quantity-tier pricing + Buy X Get Y promotions configurable from Dashboard and applied in customer purchase flow.
+- Current scope add-on: revert Support button to legacy logic (message + inline links) and allow multiple support contacts (Telegram/Facebook/Zalo...) from Dashboard settings.
+- Current scope add-on: add bot product list pagination and allow page size configuration from Dashboard settings.
+- Current scope add-on: improve Settings UI clarity by adding explicit label/help text for `shop_page_size`.
+
 Success Criteria:
-- Dashboard cards show Vietnamese labels.
-- "Don hang gan nhat" table has a "Username" column showing the username for the row's user_id.
-- Product column shows the product's name (not id/other field).
-- "Thoi gian" displays correctly for timezone Asia/Ho_Chi_Minh.
-- Stocks page:
-  - "Danh sach Stock" table supports selecting multiple rows and bulk delete and/or bulk edit.
-  - "Them Stock moi" form has an additional tab to bulk delete stocks by pasted multiline content (1 entry per line) with a confirm modal showing how many rows will be deleted.
-  - Tab switcher and multi-select checkboxes look polished and consistent with the dashboard theme.
-  - Stock add/delete forms use a consistent 2/3 (input) + 1/3 (button) layout.
-- Users page:
-  - Each user row has a "Nhắn tin" button that opens a dedicated chat page.
-  - Chat page shows message history between bot and that user and supports 1-1 messaging in a Telegram-like UI.
+- Existing completed behaviors remain working:
+  - Dashboard VN labels + latest orders username/product name + Asia/Ho_Chi_Minh time display.
+  - Stocks bulk select/edit/delete + delete-by-text tab + polished tabs/checkbox + 2/3 input + 1/3 button layout.
+  - Users page has "Nhắn tin" per row with Telegram-like 1-1 chat view.
+  - Direct Orders pending auto-cancel after 10 minutes.
+  - Reports has cards: Tổng đơn hàng / Đơn hàng đã bán / Đơn hàng thất bại / Đơn hàng đang thực hiện.
+  - Stocks page shows selected product counters: Tổng / Đã bán / Còn lại.
+- New behaviors:
+  - Product supports multiple quantity-price tiers configurable in Dashboard (example: qty >= 1 -> 20000, qty >= 10 -> 15000/account).
+  - Product supports Buy X Get Y rule configurable in Dashboard (example: buy 10 get 1; buy 20 get 2).
+  - Checkout/order total uses tiered unit price by purchased quantity.
+  - Delivered stock quantity includes promotion bonus quantity.
+  - Admin UI clearly manages these rules and purchase flow applies them consistently.
+  - Support button should use legacy behavior: tap `Hỗ trợ` -> bot sends support panel/message with contact links.
+  - Dashboard settings should support multiple support contacts (at least Telegram/Facebook/Zalo) and bot should render available links.
+  - Product inline keyboard in bot should be paginated with navigation buttons.
+- Page size should be configurable in Dashboard settings (default 10 if not configured).
+  - Settings UI should visibly label the page-size field so admin can identify what it controls.
+
 Constraints/Assumptions:
 - Work within this repo only.
 - Admin dashboard code lives under `admin-dashboard/`. (confirmed)
-- Dashboard can read `users.username` and `products.name` via Supabase queries with the current auth/RLS setup. **UNCONFIRMED**
-- Telegram Bot API does not provide a general "fetch chat history" endpoint; message history must be captured/stored by the bot when updates are received. **ASSUMED**
-- Stocks are stored in Supabase table `stock` with at least `id`, `product_id`, `content`, `sold` (per `supabase_schema.sql`). (confirmed)
-- Matching logic for bulk delete-by-text: delete rows where `stock.content` contains the entered line as a substring (case-insensitive), unless clarified otherwise. **UNCONFIRMED**
+- Bot and dashboard run with Supabase in production; sqlite fallback still exists in code. **ASSUMED**
+- Dynamic pricing/promotions should be per product and centrally stored in DB fields/tables. **ASSUMED**
+- Tier rule selection should pick the highest threshold `min_quantity <= purchased_quantity`. **ASSUMED**
+- Buy X Get Y bonus should be `floor(purchased_quantity / buy_x) * get_y` for one active rule per product. **ASSUMED**
+- Customer pays only for purchased quantity, not bonus quantity. **ASSUMED**
+- Stock availability check should require `purchased_quantity + bonus_quantity` available before confirmation. **ASSUMED**
+- Support contacts should be backward compatible with existing `admin_contact` setting if new contact settings are empty. **ASSUMED**
+- Product pagination should preserve existing `buy_{id}` callbacks and refresh behavior. **ASSUMED**
+- Configurable page size should be clamped to a safe range to avoid oversized keyboards. **ASSUMED**
+- Settings form may hide placeholders in some layouts, so labels/help text are required for critical fields. **ASSUMED**
+
 Key Decisions:
-- Use Asia/Ho_Chi_Minh for display formatting in the dashboard (not server-wide changes), unless the code already supports per-user timezone. **ASSUMED**
+- Keep prior direct-order timeout at 10 minutes (`cancelled`) unchanged.
+- Implement pricing/promotion in a way that preserves existing order data and backward compatibility when no rule is set.
+- Store pricing tiers with deterministic ordering by threshold quantity.
+- Revert support button from direct-open reply-keyboard WebApp URL to old handler-driven support panel flow.
+- Implement multi-contact support in settings with backward compatibility to existing Telegram admin contact value.
+- Implement product pagination in inline keyboard with lightweight callback handlers and configurable page size from settings.
+- Keep critical settings discoverable with explicit section label and short description (not placeholder-only).
+
 Progress State:
 - Done:
-  - Read repo root; confirmed `admin-dashboard/` exists.
-  - Updated `admin-dashboard/app/(admin)/page.tsx`:
-    - Vietnamese labels for dashboard stat cards.
-    - Latest Orders table: added `Username` column (looked up from `users` table via `user_id`).
-    - Product column now displays product `name` (looked up from `products` table via `product_id`).
-    - Time column formatted in `Asia/Ho_Chi_Minh` using `Intl.DateTimeFormat`.
-  - Ran `npm -C admin-dashboard run build` successfully.
-- Done:
-  - Updated `admin-dashboard/app/(admin)/stock/page.tsx`:
-    - "Danh sach stock" supports multi-select via checkboxes + bulk edit (sold status) + bulk delete with confirm modal.
-    - "Them stock moi" form now has 2 tabs: Them and Xoa (delete-by-text). Delete tab supports multiline input, previews match count in confirm modal, then deletes matching stocks.
-  - Ran `npm -C admin-dashboard run build` successfully after Stock changes.
-- Done:
-  - Improved Stocks UI polish:
-    - Added a segmented tab switcher style (instead of primary/danger buttons) and styled table checkboxes + center alignment + indeterminate state.
-    - Updated `admin-dashboard/app/globals.css` with `.segmented`, `.segmented-button`, `.checkbox`, `.checkbox-cell`.
-  - Ran `npm -C admin-dashboard run build` successfully.
-- Done:
-  - Made Stock add/delete forms consistent: input 2/3 width + button 1/3 width using `.form-split` in `admin-dashboard/app/globals.css` and `admin-dashboard/app/(admin)/stock/page.tsx`.
-  - Ran `npm -C admin-dashboard run build` successfully.
-- Done:
-  - Implemented admin 1-1 chat UI:
-    - `admin-dashboard/app/(admin)/users/page.tsx`: "Nhắn tin" now opens a dedicated chat page per user.
-    - `admin-dashboard/app/(admin)/users/[userId]/page.tsx`: chat-style history view + polling + send box.
-    - `admin-dashboard/app/globals.css`: added chat UI styles.
-    - `admin-dashboard/app/api/telegram/send/route.ts`: best-effort logging for 1-1 sends into `telegram_messages` (broadcasts are not logged here).
-  - Added message storage + bot-side logging:
-    - `supabase_schema.sql`: added `public.telegram_messages` + RLS policy for admins.
-    - `database/supabase_db.py` + `database/db.py`: added `log_telegram_message(...)`.
-    - `handlers/chat_logger.py` + `run.py`: log incoming private messages and wrap outgoing `send_message/send_document/send_photo`.
-  - Ran `npm -C admin-dashboard run build` successfully.
-  - Verified Python files compile (`python3 -m py_compile`) using `PYTHONPYCACHEPREFIX` to avoid cache permission errors.
+  - Dashboard/Stocks/Users/chat/timeout/reports/stock-counters changes were implemented and validated previously.
+  - Validation already passed:
+    - `npm -C admin-dashboard run build`
+    - `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile sepay_checker.py`
+  - Added schema support for pricing/promotions:
+    - `supabase_schema.sql`: `products.price_tiers` (jsonb), `products.promo_buy_quantity`, `products.promo_bonus_quantity`, `direct_orders.bonus_quantity`.
+    - Updated RPCs:
+      - `get_products_with_stock` + `get_product_with_stock` now return pricing/promo fields.
+      - `create_direct_order_and_get_bank_settings` accepts/stores `p_bonus_quantity`.
+  - Updated Python DB layers:
+    - `database/db.py`:
+      - Added sqlite migrations/columns for pricing tiers + promo + direct-order bonus quantity.
+      - `get_products/get_product` now return pricing/promo fields.
+      - `create_order_bulk` supports explicit `total_price` and `quantity`.
+      - `create_direct_order(_with_settings)` supports `bonus_quantity`.
+      - `get_pending_direct_orders` returns bonus quantity.
+    - `database/supabase_db.py`:
+      - Added pricing/promo fields in product fetches and inserts.
+      - Added direct-order `bonus_quantity` in create/fetch.
+      - Added backward-compat fallbacks for older schemas/functions.
+      - `create_order_bulk` supports explicit `total_price` and `quantity`.
+  - Added shared pricing helper:
+    - `helpers/pricing.py`:
+      - Normalize tiers, resolve unit price by quantity, compute buy-x-get-y bonus, required stock, max purchasable by stock/balance, and pricing snapshots.
+  - Integrated pricing + promo into bot purchase flow:
+    - `handlers/shop.py`:
+      - Quantity input flow now computes dynamic unit price/total and required stock (`quantity + bonus`).
+      - Balance/direct-payment checks now use computed totals.
+      - Direct-order creation stores `bonus_quantity`.
+      - Fulfillment for instant purchases delivers bonus items while charging purchased quantity only.
+      - Updated max quantity calculations for VND/USDT using stock+promo constraints.
+      - Product detail/payment prompts now show pricing tier/promo summary.
+  - Integrated pricing + promo into direct-order fulfillment:
+    - `sepay_checker.py`:
+      - Reads `bonus_quantity`, reserves/delivers `quantity + bonus_quantity`.
+      - Stores order total as expected paid amount (not delivered_qty * unit_price).
+      - User confirmations include bonus information.
+    - `admin-dashboard/app/api/direct-orders/fulfill/route.ts`:
+      - Manual fulfill uses `quantity + bonus_quantity` stock.
+      - Stores order price from paid amount (`direct_orders.amount`), not delivered quantity.
+      - Success message/file includes bonus details.
+  - Extended Dashboard product management UI:
+    - `admin-dashboard/app/(admin)/products/page.tsx`:
+      - Add/edit forms now manage multiple quantity-price tiers and buy-x-get-y inputs.
+      - Product table now shows tier summary + promotion rule.
+      - Added basic validation and error surfacing.
+    - `admin-dashboard/app/globals.css`:
+      - Added styling for tier/promo editor UI (`.pricing-box`, `.tier-row`, `.promo-row`, etc.).
+  - Removed `USDT` quick-action button from Products table row actions:
+    - `admin-dashboard/app/(admin)/products/page.tsx`:
+      - Removed `USDT` button in "Hành động" column.
+      - Removed unused `handleUpdateUsdt(...)` function.
+  - Refined bot message UI in shop flow (visual text formatting):
+    - `handlers/shop.py`:
+      - `format_pricing_rules(...)` now renders multi-line tier block:
+        - `📉 Giá theo SL:`
+        - `   - từ X: Yđ`
+      - Added `format_product_overview(...)` for cleaner product summary layout.
+      - Updated `show_product`, `select_payment_vnd`, `select_payment_usdt` text blocks for cleaner spacing/labels and more readable prompts.
+  - Applied screenshot-driven text polish for bot UI:
+    - `keyboards/inline.py`:
+      - Product button labels changed to compact visual style:
+        - `Tên SP | 70.000 đ | 📦 26` (VN), aligned with user sample.
+    - `handlers/shop.py`:
+      - Tier line formatting updated:
+        - `Từ` capitalized and indented more for readability.
+      - Payment instruction message (`send_direct_payment`) adds extra blank lines between sections/rows.
+  - Added Support button flow in user bot menu:
+    - `keyboards/inline.py`:
+      - Added reply-keyboard button:
+        - VN: `💬 Hỗ trợ`
+        - EN: `💬 Support`
+    - `handlers/start.py`:
+      - Added `handle_support_text(...)`:
+        - Reads `admin_contact` from settings.
+        - Normalizes values like `@username` or `https://t.me/username`.
+        - Sends inline URL button opening `https://t.me/{admin_contact}`.
+        - Shows fallback message if admin contact is not configured.
+        - If user pressed legacy `🆘` button text, sends one-time refreshed reply keyboard so icon updates to `💬`.
+    - `run.py`:
+      - Registered message handler for support button text regex.
+  - Updated support button to open Telegram link directly on tap:
+    - `keyboards/inline.py`:
+      - `user_reply_keyboard(...)` now accepts `support_url`.
+      - Support button is rendered as `KeyboardButton(..., web_app=WebAppInfo(url=...))` when URL exists.
+    - `helpers/ui.py`:
+      - `get_user_keyboard(...)` now reads `settings.admin_contact`, normalizes it, builds `https://t.me/{admin_contact}`, and passes to keyboard renderer.
+    - Kept legacy text handler in place for old keyboards.
+  - Added show/hide setting for Support button:
+    - `admin-dashboard/app/(admin)/settings/page.tsx`:
+      - Added new toggle key `show_support` and label `Hiện "Hỗ trợ"`.
+    - `database/db.py` + `database/supabase_db.py`:
+      - `get_ui_flags()` now returns `show_support` with default `true`.
+    - `keyboards/inline.py`:
+      - Support button is displayed only when `show_support` is enabled.
+    - `handlers/start.py`:
+      - `handle_support_text(...)` now also respects `show_support` (legacy keyboards still handled safely).
+  - Reworked Support flow back to legacy behavior + multi-contact links:
+    - `helpers/ui.py`:
+      - Removed direct-open URL injection from reply keyboard (no `WebAppInfo` support button behavior).
+    - `keyboards/inline.py`:
+      - Support menu button is now plain text button (`💬 Hỗ trợ` / `💬 Support`) and still gated by `show_support`.
+    - `handlers/start.py`:
+      - Added parser for `support_contacts` setting with multiline format `Tên|Link`.
+      - Supports Telegram/Facebook/Zalo labels with URL normalization and dedupe.
+      - Keeps backward compatibility by falling back to `admin_contact` as Telegram contact.
+      - `handle_support_text(...)` now sends support message + inline URL buttons (legacy interaction model).
+    - `admin-dashboard/app/(admin)/settings/page.tsx`:
+      - Added `support_contacts` key and textarea in Settings for managing multiple support links.
+  - Added bot product pagination (10 products per page):
+    - `keyboards/inline.py`:
+      - `products_keyboard(...)` now supports `page` + `page_size` and slices products list.
+      - Added prev/page/next navigation row when total products > 10.
+      - Refresh callback now preserves current page (`shop_{page}`).
+    - `handlers/shop.py`:
+      - `show_shop(...)` now parses callback data (`shop` or `shop_{page}`) and renders selected page.
+    - `run.py`:
+      - Shop callback route now accepts pagination pattern `^shop(?:_\\d+)?$`.
+  - Added configurable product page-size from Dashboard settings:
+    - `admin-dashboard/app/(admin)/settings/page.tsx`:
+      - Added `shop_page_size` setting input (number).
+      - Save logic now normalizes page size to safe range `1..50` (default `10`).
+    - `helpers/ui.py`:
+      - Added `get_shop_page_size(...)` helper reading `settings.shop_page_size` with fallback/clamp.
+    - `handlers/start.py`:
+      - Initial product list renders now use configured page size.
+    - `handlers/shop.py`:
+      - `handle_shop_text(...)` and `show_shop(...)` now use configured page size.
+  - Improved Settings clarity for page-size field:
+    - `admin-dashboard/app/(admin)/settings/page.tsx`:
+      - Wrapped `shop_page_size` in a labeled section (`Phân trang sản phẩm`) with explicit helper text.
+      - Replaced ambiguous placeholder with clear example (`Ví dụ: 10`).
+  - Fixed inline product buttons being visually narrowed after language selection:
+    - `handlers/start.py`:
+      - In `set_language(...)`, changed inline products message text from `"👇"` to `select_text` so Telegram uses a wider bubble and avoids heavy truncation.
 - Now:
-  - Apply Supabase migration for `telegram_messages` and verify chat history end-to-end with real Telegram updates.
+  - Wait for user verification that `shop_page_size` field label/help text is clear in Settings UI.
 - Next:
-  - Verify updated UI on the Stocks page in the browser (tab styling + checkbox alignment/indeterminate + form layout).
-  - Verify Stocks bulk actions and delete-by-text behavior against real data (RLS + matching behavior + pagination edge cases).
-  - Verify in UI with real data that username/product name resolve correctly and that timestamps match Asia/Ho_Chi_Minh expectations.
-  - If needed, apply the same timezone/date formatting helper to other admin tables (orders/deposits/withdrawals/usdt).
+  - If needed, tune wording/position of the page-size section based on screenshot feedback.
+
+Validation:
+- `npm -C admin-dashboard run build` passed after pricing/promo changes.
+- `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile handlers/shop.py sepay_checker.py database/db.py database/supabase_db.py helpers/pricing.py` passed.
+- `npm -C admin-dashboard run build` passed after removing Products `USDT` button.
+- `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile handlers/shop.py` passed after message formatting updates.
+- `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile handlers/shop.py keyboards/inline.py` passed after screenshot-driven message updates.
+- `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile handlers/start.py keyboards/inline.py run.py` passed after support button implementation.
+- `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile handlers/start.py keyboards/inline.py run.py` passed after changing support icon to `💬`.
+- `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile handlers/start.py run.py keyboards/inline.py` passed after legacy-icon auto-refresh tweak.
+- `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile handlers/start.py` passed after language-switch button width fix.
+- `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile helpers/ui.py keyboards/inline.py handlers/start.py run.py` passed after direct-open support button implementation.
+- `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile handlers/start.py keyboards/inline.py database/db.py database/supabase_db.py` passed after adding `show_support` flag.
+- `npm -C admin-dashboard run build` passed after adding `show_support` toggle in Settings page.
+- `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile handlers/start.py helpers/ui.py keyboards/inline.py` passed after reverting support button to legacy flow + multi-contact parser.
+- `npm -C admin-dashboard run build` passed after adding `support_contacts` settings field.
+- `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile keyboards/inline.py handlers/shop.py run.py` passed after product pagination changes.
+- `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile helpers/ui.py handlers/start.py handlers/shop.py` passed after adding configurable product page size setting.
+- `npm -C admin-dashboard run build` passed after adding `shop_page_size` setting field.
+- `npm -C admin-dashboard run build` passed after adding explicit label/help text for `shop_page_size` section.
+
 Open Questions:
-- What field should be shown as "Username" (Telegram username, app username, or phone/email)? **UNCONFIRMED**
-- Stocks bulk edit: currently implemented as changing `sold` status for selected rows; confirm if you also want bulk edit for other fields. **UNCONFIRMED**
-- Do you already store Telegram messages anywhere (DB table) for history? If not, history can only be shown going forward after adding logging. **UNCONFIRMED**
+- Should both features apply to all order flows (bot direct purchase, admin-created orders, any API order endpoint) or only end-user bot checkout? **UNCONFIRMED**
+- Can each product have multiple buy-x-get-y rules at once, or only one active rule? (currently assuming one active rule/product). **UNCONFIRMED**
+- If quantity does not match any explicit tier above base, should fallback use product base price? (currently assuming yes). **UNCONFIRMED**
+- For multi-contact support, should each channel allow a custom button label/icon in dashboard, or fixed channel templates are enough? **UNCONFIRMED**
 
 Notes:
 - `npm -C admin-dashboard run lint` prompts for initial ESLint setup (interactive), so it was not run.
-- Chat UI: fixed a transient duplicate render when sending from Admin Dashboard by preventing overlapping polls and deduping by `message_id`.
+- Important: functions with changed return table shape in Postgres require `DROP FUNCTION ...` then `CREATE FUNCTION`; `CREATE OR REPLACE` is not enough.
