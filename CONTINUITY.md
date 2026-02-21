@@ -71,6 +71,43 @@ Goal: Improve Admin Dashboard and sales operations, including dynamic pricing/pr
 - Current scope add-on (latest request): Bot Products management refinement:
   - Hide `Trạng thái` column in `Danh sách sản phẩm` table.
   - Add `Vị trí` field/column for manual sorting, and apply this order to product listing in Telegram Bot.
+- Current scope add-on (latest request): Bot Stock custom-check refinement:
+  - Add `Custom check` logic from `@email_inbox_extension` to Telegram Bot Dashboard `Stock` page.
+  - When check type is `Product`, selecting a product should auto-check all stock rows of that product.
+- Current scope add-on (latest request): Bot Stock custom-check UX refinement:
+  - Add form to select which comma-separated column contains `Mail` in stock content.
+  - After custom-check, add delete action to remove all rows by result group (`True` / `False` / `Error`).
+- Current scope add-on (latest request): Bot Stock custom-check output refinement:
+  - Remove displayed Stock `ID` prefix in `True` / `False` / `Error` output textareas.
+- Current scope add-on (latest request): Bot Stock custom-check history + default refinement:
+  - Save last 5 used values for `Nguồn check`, `Cột Mail`, `Filter Sender`, `Filter Subject`, `Tốc độ check`.
+  - Default each form to the most recently used value on next page open.
+- Current scope add-on (latest request): external scheduler integration guidance:
+  - Provide ready-to-use cURL payload for Stock custom-check API so user can call from cronjob.org.
+- Current scope add-on (latest request): server-side cron endpoint:
+  - Add dedicated Stock custom-check cron endpoint secured by static `CRON_SECRET` token so cronjob.org can run reliably without admin session token.
+- Current scope add-on (latest request): custom-check sender-history reliability fix:
+  - Ensure `Filter Sender` reliably persists and restores latest value/history (5 recent) even when user does not rely solely on submit-trigger persistence.
+- Current scope add-on (latest request): sender default/history bug follow-up:
+  - User reports `Filter Sender` still does not default to previous value and does not keep 5 recent values reliably.
+  - Need to persist history on field usage (not only submit), then hydrate latest value on next load.
+- Current scope add-on (latest request): payment success relay notification:
+  - After order payment success, send a relay notification to another Telegram bot.
+  - `Bot Token` and target `UserID` must be configurable from Dashboard settings.
+- Current scope add-on (latest request): products description multiline UX:
+  - In Bot Dashboard `Products` page, field `Mô tả` should support line breaks like `Gửi tin nhắn` form in `Users` page.
+- Current scope add-on (latest request): products description size/layout refinement:
+  - Keep other add-form input sizes/layout unchanged while still allowing `Mô tả` multiline input.
+  - Prefer making only `Mô tả` field larger/separate so other fields are not stretched.
+- Current scope add-on (latest request): payment relay message localization/content refinement:
+  - Convert payment success relay message text to fully Vietnamese.
+  - Show full product name in relay message instead of `Product ID` when available.
+- Current scope add-on (latest request): SePay polling performance refinement:
+  - Prevent checker from scanning an ever-growing full transaction list each cycle.
+  - Fetch bounded recent transactions and process incrementally using last-seen checkpoint.
+- Current scope add-on (latest request): SePay transaction logging refinement:
+  - Even when `SEPAY_DEBUG=false`, new transactions should still log `TX id=...`.
+  - Keep noisy full-history logging disabled.
 
 Success Criteria:
 - Existing completed behaviors remain working:
@@ -114,6 +151,19 @@ Success Criteria:
 - Bot Reports page includes richer best-practice KPIs/trends/status distribution for daily operations.
 - Products table in Bot Dashboard hides `Trạng thái` column while preserving existing hide/restore actions.
 - Product `Vị trí` value controls bot product ordering (ascending), with deterministic fallback order when empty/tie.
+- Bot `Stock` page supports `Custom check` parity with `@email_inbox_extension`; `Product` mode checks all stocks of selected product in one action.
+- Bot `Stock` custom-check supports mail-column selection for comma-separated stock content and bulk delete by result group.
+- Bot `Stock` custom-check output lists should display content-only rows (no stock ID prefix) for easier copy/use.
+- Bot `Stock` custom-check form remembers up to 5 recent values per field and defaults to latest-used values.
+- External scheduler can trigger Stock custom-check via HTTP request when correct authorization token is provided.
+- External scheduler can trigger Stock custom-check via dedicated static-token endpoint (`CRON_SECRET`) without dashboard login session.
+- `Filter Sender` history/default must reliably restore latest-used value and keep up to 5 recent entries in admin UI.
+- On successful order payment confirmation, system sends relay notification to configured external Telegram bot/user.
+- Payment relay notifications should be fully Vietnamese and include full product name display.
+- SePay checker should avoid full-history transaction scans and process only new transactions each cycle.
+- SePay checker should keep `TX id=...` logs for newly seen transactions even when debug mode is off.
+- `Mô tả` field in Bot Products add/edit flow supports multi-line input (line breaks preserved).
+- `Mô tả` multiline support should not stretch all other inputs in the add form.
 
 Constraints/Assumptions:
 - Work within this repo only.
@@ -142,6 +192,11 @@ Constraints/Assumptions:
 - Reports "best practice" is interpreted as adding actionable aggregates/trends from existing bot tables (`orders`, `direct_orders`) without introducing external BI dependencies. **ASSUMED**
 - Product position should be stored per product as integer and be editable in Bot Dashboard add/edit flows. **ASSUMED**
 - Bot product sort fallback should remain stable (`id` ascending) when `Vị trí` is null/duplicate. **ASSUMED**
+- Custom-check parsing/matching behavior should reuse `@email_inbox_extension` logic to avoid divergence. **ASSUMED**
+- Product-scope custom check should run over all stock entries tied to the selected product in current stock data source. **ASSUMED**
+- Stock content can contain multiple comma-separated columns; mail/account field index must be operator-configurable in UI/API. **ASSUMED**
+- Custom-check history persistence can use browser local storage because this is an admin-side UX preference (not core server data). **ASSUMED**
+- SePay `tx_id` is treated as monotonic numeric identifier for checkpoint compare; fallback idempotency still uses `processed_transactions`. **ASSUMED**
 
 Key Decisions:
 - Keep prior direct-order timeout at 10 minutes (`cancelled`) unchanged.
@@ -172,6 +227,22 @@ Key Decisions:
   - Persist manual sort in `products.sort_position`.
   - Bot product listing uses ascending `sort_position`; products without position fallback after positioned items and keep stable `id` order.
   - Keep hide/unhide actions intact while removing `Trạng thái` column from table UI.
+- For Stock custom-check, reuse the extension's check logic path where possible (shared helper or mirrored algorithm) instead of a new checker design.
+- `Check theo Product` must execute batch checks for every stock row belonging to the chosen product and present aggregated results.
+- Custom-check delete-by-result should physically remove matched stock rows from DB and refresh stock list/summary.
+- Custom-check form-history decision: persist recent values client-side (`localStorage`) with max 5 entries and dedupe.
+- Cron integration decision: provide a separate server endpoint using `CRON_SECRET` auth (header) and reuse same custom-check execution logic as admin endpoint.
+- Relay-notify decision: implement in payment-confirmation flow (`sepay_checker`) and read settings (`Bot Token`, `UserID`) from Dashboard-managed `settings` table.
+- Relay-notify content decision: standardize Vietnamese labels and prefer product name lookup/propagation over raw product ID display.
+- SePay checker performance decision:
+  - Always bound SePay list API calls with a safe limit.
+  - Persist `sepay_last_seen_tx_id` checkpoint and ignore transactions older/equal to checkpoint.
+  - Keep `processed_transactions` checks as idempotency safety net.
+- SePay logging decision:
+  - Keep `TX id=...` log at `INFO` for transactions that pass checkpoint filter (newly seen set).
+  - Keep verbose payload diagnostics under `SEPAY_DEBUG`.
+- Product description input UX decision: use `textarea` (same style family as Users broadcast message form) instead of single-line `input`.
+- Product description layout decision: place add-form description textarea in its own full-width row (`form-section`) to preserve original size of other inputs.
 
 Progress State:
 - Done:
@@ -745,11 +816,112 @@ Progress State:
     - `storefront-web/app/globals.css`:
       - Added auth button styles (`.auth-submit`, `.auth-switch`) and auth action layout.
       - Added checkout page UI blocks and clickable-card styles.
+  - Implemented Bot Stock `Custom check` parity with `@email_inbox_extension`:
+    - `admin-dashboard/app/api/stock/custom-check/route.ts`:
+      - New admin-auth API route for batch custom check.
+      - Supports scopes:
+        - `product`: auto-fetch/check all stock of selected product.
+        - `selected`: check only selected stock IDs.
+      - Supports sources:
+        - `tempmail` (`https://email.devtai.net/api/email/{email}`)
+        - `tinyhost` (`/api/tempmail-tinyhost`)
+        - `hotmail` (`/api/read-inbox` with refresh-token parser).
+      - Reused extension-equivalent filter logic: sender/subject `includes` match.
+      - Returns per-stock status (`true`/`false`/`error`) + summary counts.
+    - `admin-dashboard/app/(admin)/stock/page.tsx`:
+      - Added `Custom check` card with controls:
+        - check scope (`Product`/`Stock đã chọn`)
+        - source (`Hotmail`/`TempMail`/`TinyHost`)
+        - sender filter, subject filter, concurrency.
+      - Added run flow calling `/api/stock/custom-check` with admin bearer token.
+      - Added progress, error state, summary cards, and copy-ready outputs (`True`/`False`/`Error` lists).
+      - `Product` scope now auto-checks all stock of selected product as requested.
+  - Implemented follow-up fixes for real stock format + cleanup action:
+    - `admin-dashboard/app/api/stock/custom-check/route.ts`:
+      - Added `mailColumnIndex` input (1..30) for comma-separated stock content.
+      - Custom-check now reads the selected column before parsing email/hotmail account.
+      - Error responses now indicate missing/invalid mail field at selected column.
+    - `admin-dashboard/app/(admin)/stock/page.tsx`:
+      - Added form input `Cột Mail (phân tách dấu phẩy ,)`.
+      - Added bulk delete by result group (`True`/`False`/`Error`) after custom-check.
+      - Delete flow removes matching stock rows from DB and refreshes list/summary.
+  - Implemented custom-check recent-history UX:
+    - `admin-dashboard/app/(admin)/stock/page.tsx`:
+      - Added `localStorage` persistence for 5 recent values per form field:
+        - source, mail-column-index, sender filter, subject filter, concurrency.
+      - On page load, form defaults are hydrated from the most recently used values.
+      - Added history datalist suggestions for mail-column, sender, subject inputs.
+      - Source/concurrency select options now prioritize recent values while retaining all supported options.
+  - Implemented sender-history reliability follow-up:
+    - `admin-dashboard/app/(admin)/stock/page.tsx`:
+      - Added save-on-use persistence instead of submit-only persistence:
+        - Save on `Nguồn check` / `Tốc độ check` change.
+        - Save on blur for `Cột Mail`, `Filter Sender`, `Filter Subject`.
+      - `Filter Sender` / `Filter Subject` are trimmed before history save and before API payload submission.
+      - Keeps 5 recent values (dedupe + newest-first) and keeps latest value as next default after reload.
+  - Implemented dedicated cron endpoint for stock custom-check:
+    - `admin-dashboard/app/api/stock/custom-check/shared.ts`:
+      - Extracted shared custom-check execution logic (validation, stock loading, provider checks, result aggregation).
+    - `admin-dashboard/app/api/stock/custom-check/route.ts`:
+      - Refactored admin-auth route to call shared executor.
+    - `admin-dashboard/app/api/stock/custom-check/cron/route.ts`:
+      - Added `POST /api/stock/custom-check/cron` route.
+      - Secured by static `CRON_SECRET` (`X-CRON-SECRET` or `Authorization: Bearer ...`).
+      - Uses `SUPABASE_SERVICE_ROLE_KEY` so cron can run without dashboard session token.
+  - Implemented payment-success relay notification to external Telegram bot:
+    - `admin-dashboard/app/(admin)/settings/page.tsx`:
+      - Added Dashboard settings fields:
+        - `payment_notify_bot_token`
+        - `payment_notify_user_id`
+      - Added dedicated UI section `Relay thông báo thanh toán`.
+    - `sepay_checker.py`:
+      - Added settings-based relay target loading (`payment_notify_bot_token`, `payment_notify_user_id`).
+      - Added best-effort relay send to external bot when payment-confirmed direct orders are fulfilled:
+        - Bot direct order confirmations.
+        - Website direct order confirmations.
+      - Relay failures are logged and do not break fulfillment flow.
+    - `admin-dashboard/app/api/_shared/paymentRelay.ts`:
+      - New helper to read relay settings and send Telegram message.
+    - `admin-dashboard/app/api/direct-orders/fulfill/route.ts`:
+      - Added relay notification for manual bot direct-order fulfill.
+    - `admin-dashboard/app/api/website-direct-orders/fulfill/route.ts`:
+      - Added relay notification for manual website direct-order fulfill.
+  - Implemented Products description multiline UX fix:
+    - `admin-dashboard/app/(admin)/products/page.tsx`:
+      - Changed add-form `Mô tả` field from single-line `input` to multi-line `textarea` so line breaks can be entered.
+  - Completed Products add-form layout refinement for multiline description:
+    - `admin-dashboard/app/(admin)/products/page.tsx`:
+      - Moved add-form `Mô tả` textarea into its own full-width row (`form-section`) so other inputs keep original compact size.
+  - Completed payment relay message localization + product-name display refinement:
+    - `sepay_checker.py`:
+      - Relay success notifications for Bot/Website auto-fulfill are now fully Vietnamese.
+      - Replaced `Product ID` display with resolved product name (`Sản phẩm`) and kept safe fallback `#id`.
+      - Updated delivery-file header labels to Vietnamese (`Sản phẩm`, `Số lượng`, `Tổng tiền`, ...).
+    - `admin-dashboard/app/api/direct-orders/fulfill/route.ts`:
+      - Manual Bot fulfill relay message converted to Vietnamese and now shows full product name.
+      - Updated document header labels to Vietnamese.
+    - `admin-dashboard/app/api/website-direct-orders/fulfill/route.ts`:
+      - Manual Website fulfill relay message converted to Vietnamese and now shows product name.
+    - Follow-up polish:
+      - Converted remaining labels to Vietnamese (`Mã người dùng`, `Mã user website`, `Email user`) to satisfy "tiếng Việt hết".
+  - Completed SePay polling performance refinement:
+    - `sepay_checker.py`:
+      - Added bounded fetch behavior with default limit (`SEPAY_DEFAULT_LIMIT`, fallback when `SEPAY_LIMIT` is missing).
+      - Added persistent last-seen checkpoint setting `sepay_last_seen_tx_id`.
+      - Checker now skips tx older/equal to checkpoint before DB matching logic.
+      - Kept `processed_transactions` checks for idempotent safety.
+    - `.env.example` + `dist_pyc/.env.example`:
+      - Added `SEPAY_LIMIT` / `SEPAY_DEFAULT_LIMIT` sample config.
+  - Completed SePay transaction logging refinement:
+    - `sepay_checker.py`:
+      - Added helper log line for newly seen transactions: `TX id=... amount=... content=...`.
+      - This transaction log now runs even when `SEPAY_DEBUG=false` (after checkpoint filter).
+      - Kept verbose payload diagnostics behind `SEPAY_DEBUG`.
 - Now:
-  - Latest Bot Products refinements implemented and validated in code.
-  - Awaiting user QA for Products table and Bot list ordering behavior.
+  - Latest SePay logging refinement is implemented and validated.
 - Next:
-  - Fine-tune `Vị trí` UX details (label/help/default behavior) based on user feedback.
+  - If user requests, expose SePay polling limit controls in dashboard settings UI.
+  - Monitor runtime logging density after deployment.
 
 Validation:
 - `npm -C admin-dashboard run build` passed after pricing/promo changes.
@@ -848,6 +1020,20 @@ Validation:
 - `./node_modules/.bin/tsc --noEmit -p tsconfig.json` (run in `admin-dashboard/`) passed after Products hidden-tab + Orders parity + Reports best-practice update.
 - `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile database/db.py database/supabase_db.py` passed after adding product position ordering support.
 - `./node_modules/.bin/tsc --noEmit -p tsconfig.json` (run in `admin-dashboard/`) passed after Products `Vị trí` + hidden `Trạng thái` column update.
+- `./node_modules/.bin/tsc --noEmit -p tsconfig.json` (run in `admin-dashboard/`) passed after Bot Stock `Custom check` API/UI implementation.
+- `./node_modules/.bin/tsc --noEmit -p tsconfig.json` (run in `admin-dashboard/`) passed after adding custom-check mail-column selector + delete-by-result actions.
+- `./node_modules/.bin/tsc --noEmit -p tsconfig.json` (run in `admin-dashboard/`) passed after removing stock-ID prefixes from custom-check outputs.
+- `./node_modules/.bin/tsc --noEmit -p tsconfig.json` (run in `admin-dashboard/`) passed after adding custom-check recent-history persistence + latest-default hydration.
+- `./node_modules/.bin/tsc --noEmit -p tsconfig.json` (run in `admin-dashboard/`) passed after sender-history reliability follow-up (save-on-use + trim + latest default).
+- `./node_modules/.bin/tsc --noEmit -p tsconfig.json` (run in `admin-dashboard/`) passed after shared custom-check executor refactor + new cron endpoint (`CRON_SECRET`).
+- `./node_modules/.bin/tsc --noEmit -p tsconfig.json` (run in `admin-dashboard/`) passed after adding payment relay settings + relay helper usage in fulfill APIs.
+- `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile sepay_checker.py` passed after payment-success relay notification integration.
+- `./node_modules/.bin/tsc --noEmit -p tsconfig.json` (run in `admin-dashboard/`) passed after Products add-form `Mô tả` switched to `textarea` (multi-line support).
+- `./node_modules/.bin/tsc --noEmit -p tsconfig.json` (run in `admin-dashboard/`) passed after moving add-form `Mô tả` to full-width row so other inputs keep original size.
+- `./node_modules/.bin/tsc --noEmit -p tsconfig.json` (run in `admin-dashboard/`) passed after relay message Vietnamese + product-name updates in manual fulfill APIs.
+- `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile sepay_checker.py` passed after relay message Vietnamese + product-name updates for auto-fulfill notifications.
+- `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile sepay_checker.py` passed after SePay polling optimization (limit + last-seen checkpoint).
+- `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile sepay_checker.py` passed after SePay transaction-log refinement (`TX id=...` for new tx even when debug is off).
 
 Open Questions:
 - Should both features apply to all order flows (bot direct purchase, admin-created orders, any API order endpoint) or only end-user bot checkout? **UNCONFIRMED**

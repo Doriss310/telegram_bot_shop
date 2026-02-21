@@ -16,6 +16,9 @@ SEPAY_DEBUG = os.getenv("SEPAY_DEBUG", "").lower() in ("1", "true", "yes")
 SEPAY_LIMIT = os.getenv("SEPAY_LIMIT", "").strip()
 SEPAY_FROM_DATE = os.getenv("SEPAY_FROM_DATE", "").strip()
 SEPAY_TO_DATE = os.getenv("SEPAY_TO_DATE", "").strip()
+SEPAY_LAST_SEEN_TX_ID_KEY = "sepay_last_seen_tx_id"
+PAYMENT_RELAY_NOTIFY_TOKEN_KEY = "payment_notify_bot_token"
+PAYMENT_RELAY_NOTIFY_USER_ID_KEY = "payment_notify_user_id"
 
 
 def _env_positive_int(name: str, default: int) -> int:
@@ -26,6 +29,7 @@ def _env_positive_int(name: str, default: int) -> int:
         return default
 
 
+SEPAY_DEFAULT_LIMIT = _env_positive_int("SEPAY_DEFAULT_LIMIT", 200)
 DIRECT_ORDER_PENDING_EXPIRE_MINUTES = _env_positive_int("DIRECT_ORDER_PENDING_EXPIRE_MINUTES", 10)
 DIRECT_ORDER_PENDING_EXPIRE_SECONDS = DIRECT_ORDER_PENDING_EXPIRE_MINUTES * 60
 logger = logging.getLogger(__name__)
@@ -33,6 +37,7 @@ logger = logging.getLogger(__name__)
 if USE_SUPABASE:
     from database import (
         get_setting,
+        set_setting,
         get_pending_deposits,
         update_balance,
         get_balance,
@@ -74,6 +79,148 @@ def format_description_block(description: str | None, label: str = "📝 Mô t�
         return ""
     return f"{label}:\n{cleaned}\n\n"
 
+
+def _parse_chat_id(raw_value):
+    if raw_value is None:
+        return None
+    text = str(raw_value).strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return None
+
+
+async def get_payment_relay_target():
+    if USE_SUPABASE:
+        token = str(await get_setting(PAYMENT_RELAY_NOTIFY_TOKEN_KEY, "") or "").strip()
+        chat_id = _parse_chat_id(await get_setting(PAYMENT_RELAY_NOTIFY_USER_ID_KEY, ""))
+        return token, chat_id
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT value FROM settings WHERE key = ?", (PAYMENT_RELAY_NOTIFY_TOKEN_KEY,))
+        token_row = await cursor.fetchone()
+        token = str(token_row[0] if token_row else "").strip()
+
+        cursor = await db.execute("SELECT value FROM settings WHERE key = ?", (PAYMENT_RELAY_NOTIFY_USER_ID_KEY,))
+        chat_row = await cursor.fetchone()
+        chat_id = _parse_chat_id(chat_row[0] if chat_row else "")
+        return token, chat_id
+
+
+async def send_payment_relay_notification(relay_token: str, relay_chat_id: int | None, text: str):
+    if not relay_token or relay_chat_id is None:
+        return False
+
+    url = f"https://api.telegram.org/bot{relay_token}/sendMessage"
+    payload = {
+        "chat_id": relay_chat_id,
+        "text": str(text or "").strip(),
+    }
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(url, json=payload) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    logger.warning("Relay notify failed (HTTP %s): %s", resp.status, body[:200])
+                    return False
+                data = await resp.json()
+                if not data.get("ok"):
+                    logger.warning("Relay notify failed: %s", data)
+                    return False
+                return True
+        except Exception as e:
+            logger.warning("Relay notify exception: %s", e)
+            return False
+
+
+def _resolve_product_name(product: dict | None, product_id: int) -> str:
+    if isinstance(product, dict):
+        for key in ("website_name", "name"):
+            value = str(product.get(key) or "").strip()
+            if value:
+                return value
+    return f"#{product_id}"
+
+
+def _content_preview(value: str, max_len: int = 120) -> str:
+    compact = " ".join(str(value or "").split())
+    return compact[:max_len]
+
+
+def _log_tx_seen(tx_id: str, amount: int, content: str):
+    logger.info("TX id=%s amount=%s content=%s", tx_id, amount, _content_preview(content))
+
+
+def _tx_id_to_int(tx_id: str | None):
+    if tx_id is None:
+        return None
+    text = str(tx_id).strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pick_newer_tx_id(current_tx_id: str | None, candidate_tx_id: str | None):
+    current = str(current_tx_id or "").strip()
+    candidate = str(candidate_tx_id or "").strip()
+    if not candidate:
+        return current
+    if not current:
+        return candidate
+
+    current_int = _tx_id_to_int(current)
+    candidate_int = _tx_id_to_int(candidate)
+    if current_int is not None and candidate_int is not None:
+        return candidate if candidate_int > current_int else current
+    return current
+
+
+def _is_tx_newer_than_checkpoint(tx_id: str, checkpoint_tx_id: str) -> bool:
+    checkpoint = str(checkpoint_tx_id or "").strip()
+    value = str(tx_id or "").strip()
+    if not value or not checkpoint:
+        return bool(value)
+
+    tx_int = _tx_id_to_int(value)
+    checkpoint_int = _tx_id_to_int(checkpoint)
+    if tx_int is not None and checkpoint_int is not None:
+        return tx_int > checkpoint_int
+    return True
+
+
+async def _load_last_seen_tx_id() -> str:
+    if USE_SUPABASE:
+        return str(await get_setting(SEPAY_LAST_SEEN_TX_ID_KEY, "") or "").strip()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT value FROM settings WHERE key = ?", (SEPAY_LAST_SEEN_TX_ID_KEY,))
+        row = await cursor.fetchone()
+        return str(row[0] if row else "").strip()
+
+
+async def _save_last_seen_tx_id(tx_id: str):
+    tx_text = str(tx_id or "").strip()
+    if not tx_text:
+        return
+
+    if USE_SUPABASE:
+        await set_setting(SEPAY_LAST_SEEN_TX_ID_KEY, tx_text)
+        return
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            (SEPAY_LAST_SEEN_TX_ID_KEY, tx_text),
+        )
+        await db.commit()
+
+
 async def get_sepay_token():
     """Lấy SePay token từ database"""
     if USE_SUPABASE:
@@ -105,8 +252,8 @@ async def get_recent_transactions():
     }
     
     params = {}
-    if SEPAY_LIMIT:
-        params["limit"] = SEPAY_LIMIT
+    resolved_limit = _env_positive_int("SEPAY_LIMIT", SEPAY_DEFAULT_LIMIT)
+    params["limit"] = str(resolved_limit)
     if SEPAY_FROM_DATE:
         params["from_date"] = SEPAY_FROM_DATE
     if SEPAY_TO_DATE:
@@ -241,6 +388,12 @@ def _remove_website_direct_order_from_maps(row):
 async def process_transactions(bot_app=None):
     """Xử lý giao dịch và cộng tiền tự động"""
     transactions = await get_recent_transactions()
+    last_seen_tx_id = await _load_last_seen_tx_id()
+    latest_seen_tx_id = str(last_seen_tx_id or "").strip()
+    for tx in transactions:
+        latest_seen_tx_id = _pick_newer_tx_id(latest_seen_tx_id, _pick_tx_id(tx))
+
+    relay_token, relay_chat_id = await get_payment_relay_target()
     if USE_SUPABASE:
         pending_deposits = await get_pending_deposits()
         pending_direct_orders = await get_pending_direct_orders()
@@ -264,11 +417,12 @@ async def process_transactions(bot_app=None):
             content_norm = _normalize_content(content)
             amount = int(float(amount_in))
             tx_id = _pick_tx_id(tx)
-            if SEPAY_DEBUG:
-                logger.info("TX id=%s amount=%s content=%s", tx_id, amount, str(content)[:80])
 
             if not tx_id:
                 continue
+            if not _is_tx_newer_than_checkpoint(tx_id, last_seen_tx_id):
+                continue
+            _log_tx_seen(tx_id, amount, content)
             if await is_processed_transaction(tx_id):
                 continue
 
@@ -333,6 +487,12 @@ async def process_transactions(bot_app=None):
                     await mark_stock_sold_batch(stock_ids)
 
                     order_group = f"PAY{user_id}{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                    product = None
+                    try:
+                        product = await get_product(product_id)
+                    except Exception:
+                        product = None
+                    product_name = _resolve_product_name(product, product_id)
                     if website_direct_order:
                         website_direct_order_id = website_direct_order[0]
                         website_auth_user_id = website_direct_order[1]
@@ -362,6 +522,25 @@ async def process_transactions(bot_app=None):
                             website_direct_order_id,
                             website_order_id,
                         )
+                        await send_payment_relay_notification(
+                            relay_token,
+                            relay_chat_id,
+                            "\n".join([
+                                "✅ Thanh toán thành công (Website)",
+                                f"Mã đơn hệ thống: {order_id}",
+                                f"Mã direct order website: {website_direct_order_id}",
+                                f"Mã đơn website: {website_order_id}",
+                                f"Mã thanh toán: {code}",
+                                f"Mã giao dịch: {tx_id}",
+                                f"Số tiền nhận: {amount:,}đ",
+                                f"Số tiền kỳ vọng: {expected_amount:,}đ",
+                                f"Mã user website: {website_auth_user_id}",
+                                f"Sản phẩm: {product_name}",
+                                f"SL thanh toán: {quantity}",
+                                f"SL giao: {len(purchased_items)}",
+                                f"SL khuyến mãi: {int(bonus_quantity or 0)}",
+                            ]),
+                        )
                     else:
                         await create_order_bulk(
                             user_id,
@@ -374,24 +553,40 @@ async def process_transactions(bot_app=None):
                         )
                         await set_direct_order_status(order_id, "confirmed")
                         await mark_processed_transaction(tx_id)
+                        await send_payment_relay_notification(
+                            relay_token,
+                            relay_chat_id,
+                            "\n".join([
+                                "✅ Thanh toán thành công (Bot)",
+                                f"Mã đơn hệ thống: {order_id}",
+                                f"Mã người dùng: {user_id}",
+                                f"Mã thanh toán: {code}",
+                                f"Mã giao dịch: {tx_id}",
+                                f"Số tiền nhận: {amount:,}đ",
+                                f"Số tiền kỳ vọng: {expected_amount:,}đ",
+                                f"Sản phẩm: {product_name}",
+                                f"SL thanh toán: {quantity}",
+                                f"SL giao: {len(purchased_items)}",
+                                f"SL khuyến mãi: {int(bonus_quantity or 0)}",
+                            ]),
+                        )
 
                     if bot_app and not website_direct_order:
                         try:
-                            product = await get_product(product_id)
-                            product_name = product["name"] if product else f"#{product_id}"
+                            product_name = _resolve_product_name(product, product_id)
                             description = (product.get("description") or "").strip() if product else ""
                             format_data = product.get("format_data") if product else None
                             total_text = f"{expected_amount:,}đ"
                             header_lines = [
-                                f"Product: {product_name}",
-                                f"Qty: {len(purchased_items)}",
-                                f"Paid Qty: {quantity}",
-                                f"Total: {total_text}",
+                                f"Sản phẩm: {product_name}",
+                                f"Số lượng: {len(purchased_items)}",
+                                f"SL thanh toán: {quantity}",
+                                f"Tổng tiền: {total_text}",
                             ]
                             if bonus_quantity:
-                                header_lines.append(f"Bonus: {bonus_quantity}")
+                                header_lines.append(f"SL khuyến mãi: {bonus_quantity}")
                             if description:
-                                header_lines.append(f"Description: {description}")
+                                header_lines.append(f"Mô tả: {description}")
                             header = "\n".join(header_lines)
                             formatted_items_plain = format_stock_items(purchased_items, format_data, html=False)
                             file_buf = make_file(formatted_items_plain, header)
@@ -427,6 +622,8 @@ async def process_transactions(bot_app=None):
                     break
             if matched:
                 continue
+        if latest_seen_tx_id and latest_seen_tx_id != last_seen_tx_id:
+            await _save_last_seen_tx_id(latest_seen_tx_id)
         return
 
     async with aiosqlite.connect(DB_PATH) as db:
@@ -470,12 +667,13 @@ async def process_transactions(bot_app=None):
             content_norm = _normalize_content(content)
             amount = int(float(amount_in))
             tx_id = _pick_tx_id(tx)
-            if SEPAY_DEBUG:
-                logger.info("TX id=%s amount=%s content=%s", tx_id, amount, str(content)[:80])
 
             # Kiểm tra đã xử lý chưa
             if not tx_id:
                 continue
+            if not _is_tx_newer_than_checkpoint(tx_id, last_seen_tx_id):
+                continue
+            _log_tx_seen(tx_id, amount, content)
             cursor = await db.execute(
                 "SELECT 1 FROM processed_transactions WHERE tx_id = ?", (tx_id,)
             )
@@ -525,6 +723,8 @@ async def process_transactions(bot_app=None):
                         except:
                             pass
                     break
+        if latest_seen_tx_id and latest_seen_tx_id != last_seen_tx_id:
+            await _save_last_seen_tx_id(latest_seen_tx_id)
 
 async def init_checker_db():
     """Tạo bảng lưu giao dịch đã xử lý"""
