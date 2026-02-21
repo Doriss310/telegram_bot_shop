@@ -29,6 +29,15 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _safe_optional_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _safe_list(value: Any) -> List[Any]:
     if isinstance(value, list):
         return value
@@ -39,6 +48,43 @@ def _safe_list(value: Any) -> List[Any]:
         except Exception:
             return []
     return []
+
+
+def _product_sort_key(product: Dict[str, Any]):
+    sort_position = _safe_optional_int(product.get("sort_position"))
+    product_id = _safe_optional_int(product.get("id"))
+    id_fallback = product_id if product_id is not None else 10**12
+    return (
+        1 if sort_position is None else 0,
+        sort_position if sort_position is not None else 10**11,
+        id_fallback,
+    )
+
+
+def _sort_products_by_position(products: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return sorted(products, key=_product_sort_key)
+
+
+async def _fetch_product_positions(product_ids: List[Any]) -> Dict[str, Optional[int]]:
+    ids = [pid for pid in product_ids if pid is not None]
+    if not ids:
+        return {}
+
+    def _fetch():
+        return _get_table("products").select("id, sort_position").in_("id", ids).execute()
+
+    try:
+        resp = await _to_thread(_fetch)
+    except Exception:
+        return {}
+
+    position_map: Dict[str, Optional[int]] = {}
+    for row in resp.data or []:
+        product_id = row.get("id")
+        if product_id is None:
+            continue
+        position_map[str(product_id)] = _safe_optional_int(row.get("sort_position"))
+    return position_map
 
 
 async def _to_thread(func, *args, **kwargs):
@@ -251,9 +297,12 @@ async def get_products():
     try:
         resp = await _to_thread(_rpc)
         rows = resp.data or []
-        return [
-            {
-                "id": row.get("id"),
+        position_map = await _fetch_product_positions([row.get("id") for row in rows])
+        products = []
+        for row in rows:
+            product_id = row.get("id")
+            products.append({
+                "id": product_id,
                 "name": row.get("name"),
                 "price": _safe_int(row.get("price")),
                 "description": row.get("description"),
@@ -263,16 +312,16 @@ async def get_products():
                 "price_tiers": _safe_list(row.get("price_tiers")),
                 "promo_buy_quantity": _safe_int(row.get("promo_buy_quantity")),
                 "promo_bonus_quantity": _safe_int(row.get("promo_bonus_quantity")),
-            }
-            for row in rows
-        ]
+                "sort_position": position_map.get(str(product_id), _safe_optional_int(row.get("sort_position"))),
+            })
+        return _sort_products_by_position(products)
     except Exception:
         # Fallback to per-product counting if RPC not available
         def _fetch():
             try:
                 return _get_table("products").select(
-                    "id, name, price, description, price_usdt, format_data, price_tiers, promo_buy_quantity, promo_bonus_quantity"
-                ).order("id").execute()
+                    "id, name, price, description, price_usdt, format_data, price_tiers, promo_buy_quantity, promo_bonus_quantity, sort_position"
+                ).eq("is_deleted", False).eq("is_hidden", False).order("id").execute()
             except Exception:
                 return _get_table("products").select(
                     "id, name, price, description, price_usdt, format_data"
@@ -300,8 +349,9 @@ async def get_products():
                 "price_tiers": _safe_list(row.get("price_tiers")),
                 "promo_buy_quantity": _safe_int(row.get("promo_buy_quantity")),
                 "promo_bonus_quantity": _safe_int(row.get("promo_bonus_quantity")),
+                "sort_position": _safe_optional_int(row.get("sort_position")),
             })
-        return products
+        return _sort_products_by_position(products)
 
 
 async def get_product(product_id: int):
@@ -325,14 +375,19 @@ async def get_product(product_id: int):
             "price_tiers": _safe_list(row.get("price_tiers")),
             "promo_buy_quantity": _safe_int(row.get("promo_buy_quantity")),
             "promo_bonus_quantity": _safe_int(row.get("promo_bonus_quantity")),
+            "sort_position": _safe_optional_int(row.get("sort_position")),
         }
     except Exception:
         def _fetch():
             try:
                 return _get_table("products").select(
-                    "id, name, price, description, price_usdt, format_data, price_tiers, promo_buy_quantity, promo_bonus_quantity"
+                    "id, name, price, description, price_usdt, format_data, price_tiers, promo_buy_quantity, promo_bonus_quantity, sort_position"
                 ).eq(
                     "id", product_id
+                ).eq(
+                    "is_deleted", False
+                ).eq(
+                    "is_hidden", False
                 ).limit(1).execute()
             except Exception:
                 return _get_table("products").select(
@@ -361,6 +416,7 @@ async def get_product(product_id: int):
             "price_tiers": _safe_list(row.get("price_tiers")),
             "promo_buy_quantity": _safe_int(row.get("promo_buy_quantity")),
             "promo_bonus_quantity": _safe_int(row.get("promo_bonus_quantity")),
+            "sort_position": _safe_optional_int(row.get("sort_position")),
         }
 
 
@@ -373,6 +429,7 @@ async def add_product(
     price_tiers=None,
     promo_buy_quantity: int = 0,
     promo_bonus_quantity: int = 0,
+    sort_position: Optional[int] = None,
 ):
     def _insert():
         payload = {
@@ -384,6 +441,7 @@ async def add_product(
             "price_tiers": price_tiers if price_tiers else None,
             "promo_buy_quantity": promo_buy_quantity,
             "promo_bonus_quantity": promo_bonus_quantity,
+            "sort_position": sort_position,
         }
         try:
             return _get_table("products").insert(payload).execute()
@@ -410,14 +468,14 @@ async def update_product_price_usdt(product_id: int, price_usdt: float):
 
 
 async def delete_product(product_id: int):
-    def _delete_stock():
-        return _get_table("stock").delete().eq("product_id", product_id).execute()
+    def _soft_delete():
+        return _get_table("products").update({
+            "is_hidden": True,
+            "is_deleted": True,
+            "deleted_at": _now_iso()
+        }).eq("id", product_id).execute()
 
-    def _delete_product():
-        return _get_table("products").delete().eq("id", product_id).execute()
-
-    await _to_thread(_delete_stock)
-    await _to_thread(_delete_product)
+    await _to_thread(_soft_delete)
 
 
 async def add_stock(product_id: int, content: str):
@@ -852,6 +910,108 @@ async def set_direct_order_status(order_id: int, status: str):
         return _get_table("direct_orders").update({"status": status}).eq("id", order_id).execute()
 
     await _to_thread(_update)
+
+
+async def get_pending_website_direct_orders():
+    def _fetch():
+        return _get_table("website_direct_orders").select(
+            "id, auth_user_id, user_email, product_id, quantity, bonus_quantity, unit_price, amount, code, created_at"
+        ).eq("status", "pending").execute()
+
+    try:
+        resp = await _to_thread(_fetch)
+    except Exception:
+        return []
+
+    rows = resp.data or []
+    return [
+        (
+            row.get("id"),
+            row.get("auth_user_id"),
+            row.get("user_email"),
+            row.get("product_id"),
+            _safe_int(row.get("quantity"), 1),
+            _safe_int(row.get("bonus_quantity"), 0),
+            _safe_int(row.get("unit_price")),
+            _safe_int(row.get("amount")),
+            row.get("code"),
+            row.get("created_at"),
+        )
+        for row in rows
+    ]
+
+
+async def create_website_order_bulk(
+    auth_user_id: Optional[str],
+    user_email: Optional[str],
+    product_id: int,
+    contents: list,
+    price_per_item: int,
+    order_group: str,
+    total_price: int = None,
+    quantity: int = None,
+    source_direct_code: Optional[str] = None,
+) -> Optional[int]:
+    final_quantity = quantity if quantity is not None else len(contents)
+    final_total = total_price if total_price is not None else price_per_item * len(contents)
+
+    def _insert():
+        payload = {
+            "auth_user_id": auth_user_id,
+            "user_email": user_email,
+            "product_id": product_id,
+            "content": json.dumps(contents),
+            "price": int(final_total),
+            "quantity": int(final_quantity),
+            "order_group": order_group,
+            "source_direct_code": source_direct_code,
+            "created_at": _now_iso(),
+        }
+        try:
+            return _get_table("website_orders").insert(payload).execute()
+        except Exception:
+            legacy_payload = {
+                "auth_user_id": auth_user_id,
+                "user_email": user_email,
+                "product_id": product_id,
+                "content": json.dumps(contents),
+                "price": int(final_total),
+                "quantity": int(final_quantity),
+                "order_group": order_group,
+                "created_at": _now_iso(),
+            }
+            return _get_table("website_orders").insert(legacy_payload).execute()
+
+    resp = await _to_thread(_insert)
+    rows = resp.data or []
+    if isinstance(rows, list) and rows:
+        return _safe_int(rows[0].get("id"), 0) or None
+    if isinstance(rows, dict):
+        return _safe_int(rows.get("id"), 0) or None
+    return None
+
+
+async def set_website_direct_order_status(
+    order_id: int,
+    status: str,
+    fulfilled_order_id: Optional[int] = None,
+):
+    def _update():
+        payload: Dict[str, Any] = {
+            "status": status,
+            "updated_at": _now_iso(),
+        }
+        if status == "confirmed":
+            payload["confirmed_at"] = _now_iso()
+        if fulfilled_order_id is not None:
+            payload["fulfilled_order_id"] = fulfilled_order_id
+        return _get_table("website_direct_orders").update(payload).eq("id", order_id).execute()
+
+    try:
+        await _to_thread(_update)
+    except Exception:
+        # Website-specific tables may not exist yet on some environments.
+        return
 
 
 async def get_pending_deposits():

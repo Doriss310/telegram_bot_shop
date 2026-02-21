@@ -87,6 +87,23 @@ async def init_db():
             await db.execute("ALTER TABLE products ADD COLUMN promo_bonus_quantity INTEGER DEFAULT 0")
         except:
             pass
+        # Product visibility / soft-delete columns
+        try:
+            await db.execute("ALTER TABLE products ADD COLUMN is_hidden INTEGER DEFAULT 0")
+        except:
+            pass
+        try:
+            await db.execute("ALTER TABLE products ADD COLUMN is_deleted INTEGER DEFAULT 0")
+        except:
+            pass
+        try:
+            await db.execute("ALTER TABLE products ADD COLUMN deleted_at TEXT")
+        except:
+            pass
+        try:
+            await db.execute("ALTER TABLE products ADD COLUMN sort_position INTEGER")
+        except:
+            pass
         await db.execute("""
             CREATE TABLE IF NOT EXISTS format_templates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -292,7 +309,17 @@ async def update_balance_usdt(user_id: int, amount: float):
 async def get_products():
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "SELECT id, name, price, description, price_usdt, format_data, price_tiers, promo_buy_quantity, promo_bonus_quantity FROM products"
+            """
+            SELECT
+                id, name, price, description, price_usdt, format_data,
+                price_tiers, promo_buy_quantity, promo_bonus_quantity, sort_position
+            FROM products
+            WHERE COALESCE(is_deleted, 0) = 0 AND COALESCE(is_hidden, 0) = 0
+            ORDER BY
+                CASE WHEN sort_position IS NULL THEN 1 ELSE 0 END ASC,
+                sort_position ASC,
+                id ASC
+            """
         )
         rows = await cursor.fetchall()
         products = []
@@ -308,13 +335,20 @@ async def get_products():
                 "price_tiers": _parse_json_list(row[6]),
                 "promo_buy_quantity": row[7] or 0,
                 "promo_bonus_quantity": row[8] or 0,
+                "sort_position": row[9] if row[9] is not None else None,
             })
         return products
 
 async def get_product(product_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "SELECT id, name, price, description, price_usdt, format_data, price_tiers, promo_buy_quantity, promo_bonus_quantity FROM products WHERE id = ?",
+            """
+            SELECT
+                id, name, price, description, price_usdt, format_data,
+                price_tiers, promo_buy_quantity, promo_bonus_quantity, sort_position
+            FROM products
+            WHERE id = ? AND COALESCE(is_deleted, 0) = 0 AND COALESCE(is_hidden, 0) = 0
+            """,
             (product_id,)
         )
         row = await cursor.fetchone()
@@ -334,6 +368,7 @@ async def get_product(product_id: int):
                 "price_tiers": _parse_json_list(row[6]),
                 "promo_buy_quantity": row[7] or 0,
                 "promo_bonus_quantity": row[8] or 0,
+                "sort_position": row[9] if row[9] is not None else None,
             }
         return None
 
@@ -346,13 +381,14 @@ async def add_product(
     price_tiers=None,
     promo_buy_quantity: int = 0,
     promo_bonus_quantity: int = 0,
+    sort_position: int = None,
 ):
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             """
             INSERT INTO products
-            (name, price, description, price_usdt, format_data, price_tiers, promo_buy_quantity, promo_bonus_quantity)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (name, price, description, price_usdt, format_data, price_tiers, promo_buy_quantity, promo_bonus_quantity, sort_position)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 name,
@@ -363,6 +399,7 @@ async def add_product(
                 json.dumps(price_tiers) if price_tiers else None,
                 promo_buy_quantity,
                 promo_bonus_quantity,
+                int(sort_position) if sort_position is not None else None,
             ),
         )
         await db.commit()
@@ -375,8 +412,10 @@ async def update_product_price_usdt(product_id: int, price_usdt: float):
 
 async def delete_product(product_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM stock WHERE product_id = ?", (product_id,))
-        await db.execute("DELETE FROM products WHERE id = ?", (product_id,))
+        await db.execute(
+            "UPDATE products SET is_hidden = 1, is_deleted = 1, deleted_at = ? WHERE id = ?",
+            (datetime.now().isoformat(), product_id)
+        )
         await db.commit()
 
 async def add_stock(product_id: int, content: str):

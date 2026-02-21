@@ -44,7 +44,10 @@ if USE_SUPABASE:
         get_available_stock_batch,
         mark_stock_sold_batch,
         create_order_bulk,
+        create_website_order_bulk,
         get_product,
+        get_pending_website_direct_orders,
+        set_website_direct_order_status,
     )
 else:
     import aiosqlite
@@ -181,14 +184,21 @@ def _is_direct_order_expired(created_at: str | None) -> bool:
 async def _auto_cancel_expired_direct_orders(pending_direct_orders, bot_app=None):
     active_orders = []
     for order in pending_direct_orders:
-        order_id, user_id, _product_id, _quantity, _bonus_quantity, _unit_price, _expected_amount, _code, created_at = order
+        order_id, user_id, _product_id, _quantity, _bonus_quantity, _unit_price, _expected_amount, code, created_at = order
         if not _is_direct_order_expired(created_at):
             active_orders.append(order)
             continue
 
         await set_direct_order_status(order_id, "cancelled")
+        website_order = _find_website_direct_order(code, _website_orders_by_code_upper, _website_orders_by_code_norm)
+        if website_order:
+            try:
+                await set_website_direct_order_status(website_order[0], "cancelled")
+            except Exception:
+                pass
+            _remove_website_direct_order_from_maps(website_order)
         logger.info("⏱️ Auto-cancel direct order #%s after %sm pending.", order_id, DIRECT_ORDER_PENDING_EXPIRE_MINUTES)
-        if bot_app:
+        if bot_app and not website_order:
             try:
                 await bot_app.bot.send_message(
                     user_id,
@@ -198,15 +208,52 @@ async def _auto_cancel_expired_direct_orders(pending_direct_orders, bot_app=None
                 pass
     return active_orders
 
+
+_website_orders_by_code_upper = {}
+_website_orders_by_code_norm = {}
+
+
+def _build_website_direct_order_maps(pending_website_direct_orders):
+    _website_orders_by_code_upper.clear()
+    _website_orders_by_code_norm.clear()
+    for row in pending_website_direct_orders:
+        code = str(row[8] or "").strip()
+        if not code:
+            continue
+        _website_orders_by_code_upper[code.upper()] = row
+        _website_orders_by_code_norm[_normalize_content(code)] = row
+
+
+def _find_website_direct_order(code: str, by_code_upper: dict, by_code_norm: dict):
+    code_text = str(code or "").strip()
+    if not code_text:
+        return None
+    return by_code_upper.get(code_text.upper()) or by_code_norm.get(_normalize_content(code_text))
+
+
+def _remove_website_direct_order_from_maps(row):
+    code = str(row[8] or "").strip()
+    if not code:
+        return
+    _website_orders_by_code_upper.pop(code.upper(), None)
+    _website_orders_by_code_norm.pop(_normalize_content(code), None)
+
 async def process_transactions(bot_app=None):
     """Xử lý giao dịch và cộng tiền tự động"""
     transactions = await get_recent_transactions()
     if USE_SUPABASE:
         pending_deposits = await get_pending_deposits()
         pending_direct_orders = await get_pending_direct_orders()
+        pending_website_direct_orders = await get_pending_website_direct_orders()
+        _build_website_direct_order_maps(pending_website_direct_orders)
         pending_direct_orders = await _auto_cancel_expired_direct_orders(pending_direct_orders, bot_app)
         if SEPAY_DEBUG:
-            logger.info("Pending deposits: %s | pending direct orders: %s", len(pending_deposits), len(pending_direct_orders))
+            logger.info(
+                "Pending deposits: %s | pending direct orders: %s | pending website direct orders: %s",
+                len(pending_deposits),
+                len(pending_direct_orders),
+                len(pending_website_direct_orders),
+            )
         for tx in transactions:
             amount_in = _pick_amount(tx)
             if float(amount_in) <= 0:
@@ -259,13 +306,20 @@ async def process_transactions(bot_app=None):
                 order_id, user_id, product_id, quantity, bonus_quantity, unit_price, expected_amount, code, _created_at = order
                 code_upper = code.upper()
                 code_norm = _normalize_content(code)
+                website_direct_order = _find_website_direct_order(code, _website_orders_by_code_upper, _website_orders_by_code_norm)
                 if (code_upper in content_upper or code_norm in content_norm) and amount >= expected_amount:
                     # Fulfill direct order
                     deliver_quantity = max(1, int(quantity) + max(0, int(bonus_quantity or 0)))
                     stocks = await get_available_stock_batch(product_id, deliver_quantity)
                     if not stocks or len(stocks) < deliver_quantity:
                         await set_direct_order_status(order_id, "failed")
-                        if bot_app:
+                        if website_direct_order:
+                            try:
+                                await set_website_direct_order_status(website_direct_order[0], "failed")
+                            except Exception:
+                                pass
+                            _remove_website_direct_order_from_maps(website_direct_order)
+                        elif bot_app:
                             await bot_app.bot.send_message(
                                 user_id,
                                 "❌ Thanh toán đã nhận nhưng sản phẩm hiện hết hàng. Vui lòng liên hệ admin."
@@ -279,63 +333,96 @@ async def process_transactions(bot_app=None):
                     await mark_stock_sold_batch(stock_ids)
 
                     order_group = f"PAY{user_id}{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                    await create_order_bulk(
-                        user_id,
-                        product_id,
-                        purchased_items,
-                        unit_price,
-                        order_group,
-                        total_price=expected_amount,
-                        quantity=len(purchased_items),
-                    )
-                    await set_direct_order_status(order_id, "confirmed")
-                    await mark_processed_transaction(tx_id)
-
-                    if bot_app:
-                        product = await get_product(product_id)
-                        product_name = product["name"] if product else f"#{product_id}"
-                        description = (product.get("description") or "").strip() if product else ""
-                        format_data = product.get("format_data") if product else None
-                        total_text = f"{expected_amount:,}đ"
-                        header_lines = [
-                            f"Product: {product_name}",
-                            f"Qty: {len(purchased_items)}",
-                            f"Paid Qty: {quantity}",
-                            f"Total: {total_text}",
-                        ]
-                        if bonus_quantity:
-                            header_lines.append(f"Bonus: {bonus_quantity}")
-                        if description:
-                            header_lines.append(f"Description: {description}")
-                        header = "\n".join(header_lines)
-                        formatted_items_plain = format_stock_items(purchased_items, format_data, html=False)
-                        file_buf = make_file(formatted_items_plain, header)
-                        filename = f"{product_name}_{len(purchased_items)}.txt"
-
-                        success_text = (
-                            "✅ Thanh toán thành công!\n\n"
-                            f"🧾 {product_name} | SL: {len(purchased_items)}\n"
-                            f"💰 Tổng: {total_text}"
+                    if website_direct_order:
+                        website_direct_order_id = website_direct_order[0]
+                        website_auth_user_id = website_direct_order[1]
+                        website_user_email = website_direct_order[2]
+                        website_order_id = await create_website_order_bulk(
+                            website_auth_user_id,
+                            website_user_email,
+                            product_id,
+                            purchased_items,
+                            unit_price,
+                            order_group,
+                            total_price=expected_amount,
+                            quantity=len(purchased_items),
+                            source_direct_code=code,
                         )
-                        if bonus_quantity:
-                            success_text += f"\n🎁 Tặng thêm: {bonus_quantity}"
-                        description_block = format_description_block(description)
-                        if len(purchased_items) > 5:
-                            msg = await bot_app.bot.send_document(
-                                chat_id=user_id,
-                                document=file_buf,
-                                filename=filename,
-                                caption=success_text
+                        await set_direct_order_status(order_id, "confirmed")
+                        await set_website_direct_order_status(
+                            website_direct_order_id,
+                            "confirmed",
+                            fulfilled_order_id=website_order_id,
+                        )
+                        _remove_website_direct_order_from_maps(website_direct_order)
+                        await mark_processed_transaction(tx_id)
+                        logger.info(
+                            "✅ Website direct order confirmed: code=%s website_direct_order_id=%s website_order_id=%s",
+                            code,
+                            website_direct_order_id,
+                            website_order_id,
+                        )
+                    else:
+                        await create_order_bulk(
+                            user_id,
+                            product_id,
+                            purchased_items,
+                            unit_price,
+                            order_group,
+                            total_price=expected_amount,
+                            quantity=len(purchased_items),
+                        )
+                        await set_direct_order_status(order_id, "confirmed")
+                        await mark_processed_transaction(tx_id)
+
+                    if bot_app and not website_direct_order:
+                        try:
+                            product = await get_product(product_id)
+                            product_name = product["name"] if product else f"#{product_id}"
+                            description = (product.get("description") or "").strip() if product else ""
+                            format_data = product.get("format_data") if product else None
+                            total_text = f"{expected_amount:,}đ"
+                            header_lines = [
+                                f"Product: {product_name}",
+                                f"Qty: {len(purchased_items)}",
+                                f"Paid Qty: {quantity}",
+                                f"Total: {total_text}",
+                            ]
+                            if bonus_quantity:
+                                header_lines.append(f"Bonus: {bonus_quantity}")
+                            if description:
+                                header_lines.append(f"Description: {description}")
+                            header = "\n".join(header_lines)
+                            formatted_items_plain = format_stock_items(purchased_items, format_data, html=False)
+                            file_buf = make_file(formatted_items_plain, header)
+                            filename = f"{product_name}_{len(purchased_items)}.txt"
+
+                            success_text = (
+                                "✅ Thanh toán thành công!\n\n"
+                                f"🧾 {product_name} | SL: {len(purchased_items)}\n"
+                                f"💰 Tổng: {total_text}"
                             )
-                            mark_bot_message(user_id, msg.message_id)
-                        else:
-                            items_formatted = "\n\n".join(format_stock_items(purchased_items, format_data, html=True))
-                            msg = await bot_app.bot.send_message(
-                                chat_id=user_id,
-                                text=f"{success_text}\n\n{description_block}🔐 Account:\n{items_formatted}",
-                                parse_mode="HTML"
-                            )
-                            mark_bot_message(user_id, msg.message_id)
+                            if bonus_quantity:
+                                success_text += f"\n🎁 Tặng thêm: {bonus_quantity}"
+                            description_block = format_description_block(description)
+                            if len(purchased_items) > 5:
+                                msg = await bot_app.bot.send_document(
+                                    chat_id=user_id,
+                                    document=file_buf,
+                                    filename=filename,
+                                    caption=success_text
+                                )
+                                mark_bot_message(user_id, msg.message_id)
+                            else:
+                                items_formatted = "\n\n".join(format_stock_items(purchased_items, format_data, html=True))
+                                msg = await bot_app.bot.send_message(
+                                    chat_id=user_id,
+                                    text=f"{success_text}\n\n{description_block}🔐 Account:\n{items_formatted}",
+                                    parse_mode="HTML"
+                                )
+                                mark_bot_message(user_id, msg.message_id)
+                        except Exception:
+                            pass
                     matched = True
                     break
             if matched:

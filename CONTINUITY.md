@@ -4,6 +4,73 @@ Goal: Improve Admin Dashboard and sales operations, including dynamic pricing/pr
 - Current scope add-on: revert Support button to legacy logic (message + inline links) and allow multiple support contacts (Telegram/Facebook/Zalo...) from Dashboard settings.
 - Current scope add-on: add bot product list pagination and allow page size configuration from Dashboard settings.
 - Current scope add-on: improve Settings UI clarity by adding explicit label/help text for `shop_page_size`.
+- Current scope add-on: in Admin Dashboard `Users` page, show per-user purchase stats (order count and total paid amount).
+- Current scope add-on: Users page search should support both `user_id` and `username`.
+- Current scope add-on: design a public storefront website (style similar to shopmmo.net screenshots) using existing Bot/Dashboard product/settings data.
+- Current scope add-on: storefront must be a separate Next.js project folder, connected to Supabase stock data, with VietQR + SePay payment flow similar to Telegram bot.
+- Current scope add-on: storefront index currently too UI-only; implement full runtime logic aligned with existing Bot/Dashboard behavior.
+- Current scope add-on: improve storefront visual quality by allowing banner images to be configured and rebalancing typography/font sizes.
+- Current scope add-on: rename Admin Dashboard banner groups to business terms (`Banner Giữa`, `Banner Ứng dụng`, `Banner Quảng cáo`) and clarify product-card covers as `Banner Hàng hóa` (per product).
+- Current scope add-on: redesign product cards to match provided shopmmo-like visual style (image-like header, badge/chip, compact metadata line, order link).
+- Current scope add-on: refine product-card typography to be visually close to reference (font family/weight/size), because current result is still judged too different/ugly.
+- Current scope add-on: add Website Product Banner settings (Banner Hàng hóa per Product) and split Website settings/prices into a separate admin dashboard page.
+- Current scope add-on: split into 2 truly separate dashboards, each with its own sidebar and equivalent settings surface:
+  - Bot Telegram Dashboard
+  - Website Dashboard
+- Current scope add-on: refine Website Dashboard/Storefront banner UX:
+  - Hide bot-only columns in Website Products dashboard (`Tên Bot`, `Giá Bot`, `Tier Bot`) and hide `Logo Website (URL)` input.
+  - `Banner Ứng dụng` must support dynamic add/remove in Website Settings.
+  - Storefront should show 4 app banners by default; if >4 then allow left/right swipe navigation.
+  - Side ad banners must support configurable click-through links and close (`X`) action on storefront.
+- Current scope add-on: Website Dashboard must have full tab parity with Bot Dashboard, while data domain is split per channel:
+  - Website tabs required: `Dashboard`, `Products`, `Stock`, `Orders`, `Direct Orders`, `Users`, `Reports`, `Settings`.
+  - `Products` and `Stock` behavior should mirror bot dashboard UX; for products only description content differs.
+  - `Orders`, `Direct Orders`, `Users`, `Reports`, `Settings` must be separated from bot data.
+  - Website Users must support account auth model (website account records and user-bound order history).
+  - Any new SQL for this scope must be created in new SQL file(s), not appended to old SQL file.
+- Current scope add-on: enable full Website auto-fulfillment via SePay checker so `website_orders` are created automatically and no manual approval is required in Website Direct Orders tab.
+- Current scope add-on: fix Telegram Bot Dashboard regression where Orders/Reports were incorrectly filtered by `user_id < 900000000`, hiding valid Telegram users with large numeric IDs.
+- Current scope add-on: fix Dashboard switcher UI in sidebar (broken button layout) and rename switch CTA text to `Website Dashboard`.
+- Current scope add-on: separate Website Product pricing fields from Bot Product pricing fields (`Giá`, `Giá theo SL`, `Khuyến mãi`) and remove Website Settings section `Hiển thị menu Website`.
+- Current scope add-on: add SQL support for Product hide/soft-delete so products can be hidden/soft-deleted without deleting related Orders history.
+- Current scope add-on: polish Products action buttons UI (Edit/Hide/Soft delete/Restore) to look cleaner and avoid cramped stacked layout in table action column.
+- Current scope add-on: Website storefront UI/UX refinement:
+  - Remove top header strip (`Chính sách / FAQ / Liên hệ / language / mode`) from storefront.
+  - Add search dropdown suggestion UI and logic similar to provided reference.
+  - Add/search-results page and route navigation when clicking `Xem tất cả kết quả`.
+- Current scope add-on: Website banner system refinement:
+  - Remove middle menu row (`Sản phẩm / Đơn hàng / Blogs / Telegram`) from storefront.
+  - Make banners image-only (remove overlay text from middle/app/side banners).
+  - Support multiple `Banner Giữa` items configurable in Website Dashboard with add/remove.
+  - Enable hero-banner swipe with arrows + drag + auto-swipe when count > 1.
+  - Upgrade app-banner carousel to include drag + auto-swipe when count > 4.
+  - Add close animation for side ad banners and fix UI break when ads are closed.
+- Current scope add-on: further storefront cleanup:
+  - Remove homepage UI/logic blocks shown in latest screenshot (direct-order notice row, stats row, category row).
+  - Add Website Dashboard setting to hide/show `Banner Ứng dụng`.
+  - Closing side ad banners must not trigger content layout resize.
+- Current scope add-on: storefront auth/checkout UX revision:
+  - Fix missing CSS styling on auth action buttons.
+  - Add `Password Confirm` input for signup form validation.
+  - For login-required views, show login form directly (not only a login button).
+  - Remove two header shortcut icons (cart/package) and keep logic commented.
+  - Make product banner area image-only (remove all text overlays inside banner).
+  - Clicking a product card should start purchase flow immediately, and purchase flow must be moved from modal to a dedicated checkout page.
+- Current scope add-on: hotfix Website checkout order-creation error:
+  - Error: `insert or update on table "direct_orders" violates foreign key constraint "direct_orders_user_id_fkey"` when creating order from Website checkout.
+  - Need to route Website checkout to website-specific direct-order persistence (or ensure valid user FK mapping) without breaking Telegram bot flows.
+- Current scope add-on: storefront visual refinement batch:
+  - Remove footer-like info block (`Thanh toán VietQR + SePay` / `Hỗ trợ`) from storefront page.
+  - Redesign sort/filter control row (`Sắp xếp` + `Hiện cả hết hàng`) for cleaner, modern UI/UX.
+- Current scope add-on: storefront filter behavior tweak:
+  - `Hiện cả hết hàng` must be enabled by default on initial load and after filter reset.
+- Current scope add-on (new request): Bot Admin Dashboard refinement batch:
+  - Products page: add separate `Đang ẩn` tab in `Danh sách sản phẩm`, showing hidden products separately from normal visible products.
+  - Orders page: align displayed columns/data with Dashboard latest-orders table.
+  - Reports page: expand reporting logic/UI with best-practice operational metrics (beyond basic revenue/order counts).
+- Current scope add-on (latest request): Bot Products management refinement:
+  - Hide `Trạng thái` column in `Danh sách sản phẩm` table.
+  - Add `Vị trí` field/column for manual sorting, and apply this order to product listing in Telegram Bot.
 
 Success Criteria:
 - Existing completed behaviors remain working:
@@ -24,6 +91,29 @@ Success Criteria:
   - Product inline keyboard in bot should be paginated with navigation buttons.
 - Page size should be configurable in Dashboard settings (default 10 if not configured).
   - Settings UI should visibly label the page-size field so admin can identify what it controls.
+- Users page should display, for each user row, the number of purchased orders and the total amount paid.
+- Users page search form should filter by `user_id` or `username`.
+- Public storefront page should exist in the web app with a shop-style layout (header/search/categories/banner/product cards) similar to provided screenshots.
+- Storefront product cards should render live data from existing products/settings sources, with safe fallbacks when data is unavailable.
+- Storefront should be responsive on desktop/mobile and not break existing admin dashboard routes.
+- A separate Next.js storefront project folder should be created and runnable independently from `admin-dashboard`.
+- Storefront checkout should create direct payment orders and expose VietQR transfer instructions compatible with existing SePay processing flow.
+- Storefront index and related flows should use real settings/products/orders logic (not demo-only behavior), including settings-driven visibility, page sizing, and order status handling.
+- Storefront should support configurable banner image URLs from Dashboard settings (hero/side/mini banners) with graceful fallback styles when images are empty.
+- Storefront typography should be tuned for better visual balance on desktop and mobile (especially cards, headings, and promo text).
+- Website dashboard now has full tab parity and separate datasets where required:
+  - Website `Dashboard` shows report + latest transactions from website order sources.
+  - Website `Products` and `Stock` remain parity UX with bot dashboard.
+  - Website `Orders`, `Direct Orders`, `Users`, `Reports`, `Settings` use website-specific datasets/settings.
+  - SQL additions for this phase are delivered in new SQL file(s).
+- Website direct payments are auto-fulfilled end-to-end:
+  - SePay checker confirms payment and automatically creates `website_orders` from `website_direct_orders`.
+  - Website direct orders move status without requiring manual approve action.
+- Bot Products list supports explicit hidden-products view tab (`Đang hiển thị` vs `Đang ẩn`) so hidden items are not mixed into normal list.
+- Bot Orders page columns/dataset match Dashboard order-preview fields for consistent operations view.
+- Bot Reports page includes richer best-practice KPIs/trends/status distribution for daily operations.
+- Products table in Bot Dashboard hides `Trạng thái` column while preserving existing hide/restore actions.
+- Product `Vị trí` value controls bot product ordering (ascending), with deterministic fallback order when empty/tie.
 
 Constraints/Assumptions:
 - Work within this repo only.
@@ -38,6 +128,20 @@ Constraints/Assumptions:
 - Product pagination should preserve existing `buy_{id}` callbacks and refresh behavior. **ASSUMED**
 - Configurable page size should be clamped to a safe range to avoid oversized keyboards. **ASSUMED**
 - Settings form may hide placeholders in some layouts, so labels/help text are required for critical fields. **ASSUMED**
+- User purchase stats should be computed from persisted orders data and aggregated by user id. **ASSUMED**
+- Username search should be case-insensitive and resilient to optional `@` prefix. **ASSUMED**
+- New storefront should be implemented in a separate Next.js folder in this repo (not merged into `admin-dashboard`). **CONFIRMED by user**
+- Storefront backend calls should run server-side (or API routes) to avoid exposing service-role credentials while bypassing admin-only RLS for products/settings. **ASSUMED**
+- Visual parity is approximate (same structure/style direction), not a pixel-perfect clone of external assets. **ASSUMED**
+- Website storefront continues to use direct-order VietQR flow (not full account/password auth), so Telegram ID is the user identity bridge. **ASSUMED**
+- Banner image values are managed as settings string URLs and can point to Supabase Storage public links or external CDN links. **ASSUMED**
+- For website-auth requirement, dashboard will manage website users from dedicated table (email + display profile + created_at), while storefront auth integration can be staged. **ASSUMED**
+- Telegram numeric `user_id` cannot be split reliably by threshold (many valid IDs are >= 900000000). **CONFIRMED by bug**
+- For new Products hidden-tab UX, hidden status should be controlled by existing `products.is_hidden` and must not alter delete semantics (`is_deleted`). **ASSUMED**
+- "Orders page giống Dashboard" is interpreted as matching Dashboard latest-orders columns (`id`, `username`, `product name`, `quantity`, `price`, `created_at`). **ASSUMED**
+- Reports "best practice" is interpreted as adding actionable aggregates/trends from existing bot tables (`orders`, `direct_orders`) without introducing external BI dependencies. **ASSUMED**
+- Product position should be stored per product as integer and be editable in Bot Dashboard add/edit flows. **ASSUMED**
+- Bot product sort fallback should remain stable (`id` ascending) when `Vị trí` is null/duplicate. **ASSUMED**
 
 Key Decisions:
 - Keep prior direct-order timeout at 10 minutes (`cancelled`) unchanged.
@@ -47,9 +151,49 @@ Key Decisions:
 - Implement multi-contact support in settings with backward compatibility to existing Telegram admin contact value.
 - Implement product pagination in inline keyboard with lightweight callback handlers and configurable page size from settings.
 - Keep critical settings discoverable with explicit section label and short description (not placeholder-only).
+- Add user stats fields in dashboard data flow without regressing existing users table fields/actions.
+- Compute Users page purchase stats from `orders` table (count rows, sum `price`) to represent completed purchases and avoid double-counting `direct_orders`.
+- Extend Users filter logic to match by numeric `user_id` or text `username` without changing existing broadcast/chat actions.
+- Implement storefront as a standalone Next.js app folder in this repository and keep `admin-dashboard` unchanged.
+- Use local gradient/shape/card styling (no direct external asset copying) to match the screenshot's visual language safely.
+- Reuse existing direct-order + SePay model: storefront creates pending `direct_orders` with unique code, displays VietQR details, and relies on current SePay checker/fulfillment pipeline.
+- Use folder name `storefront-web/` for the new standalone Next.js storefront project.
+- Prioritize adding operational logic before adding extra decorative sections: products/settings/orders APIs, status/expiry handling, and settings-driven UX.
+- Expose banner image configuration in admin settings so non-dev operators can update storefront visuals without code changes.
+- Auto-fulfillment for Website is handled by SePay checker using website-specific tables keyed by payment `code`; manual Website Direct Orders approval becomes optional fallback.
+- Remove bot dashboard separation logic based on `user_id` sentinel threshold; do not classify channel by numeric `user_id`.
+- For immediate stability, bot Orders/Reports should read bot datasets without `user_id` threshold filters.
+- Keep implementation scoped to Bot Admin pages under `admin-dashboard/app/(admin)` unless user explicitly asks parity changes in Website Dashboard too.
+- For this refinement batch, use existing tables/fields only (`products.is_hidden/is_deleted`, `orders`, `users`, `direct_orders`) and avoid schema changes unless strictly required.
+- Products list split-view decision: maintain 3 operational tabs (`Đang hiển thị`, `Đang ẩn`, `Đã xóa mềm`) with default on `Đang hiển thị` so hidden items never mix with normal list while restore workflow remains accessible.
+- Reports best-practice baseline chosen for this batch: revenue/order trends, efficiency KPIs (AOV, avg qty), direct-order quality rates, pending-overdue count, and top-product ranking.
+- For latest products-ordering request, introduce explicit product position ordering in bot-facing data flow rather than relying on creation order.
+- Product ordering implementation decision:
+  - Persist manual sort in `products.sort_position`.
+  - Bot product listing uses ascending `sort_position`; products without position fallback after positioned items and keep stable `id` order.
+  - Keep hide/unhide actions intact while removing `Trạng thái` column from table UI.
 
 Progress State:
 - Done:
+  - Storefront filter behavior tweak completed:
+    - `Hiện cả hết hàng` now defaults to ON when page mounts.
+    - `Reset` filters now returns `Hiện cả hết hàng` to ON state.
+  - Storefront visual refinement batch completed:
+    - Removed bottom info/footer UI block (`Thanh toán VietQR + SePay` / `Hỗ trợ`) from storefront page.
+    - Redesigned homepage sort/filter controls with modern pill + switch UI for better visual balance.
+  - Fixed Website checkout FK violation on `direct_orders.user_id`:
+    - Root cause: Website checkout inserted into `direct_orders` with sentinel `user_id` that could be missing in `users` table, violating FK.
+    - Implemented shadow-user ensure step in `storefront-web/lib/shop.ts`:
+      - Added `ensureWebsiteShadowUser(...)` to guarantee/create a mapped row in `users` before creating direct order.
+      - Moved website sentinel range to high isolated bigint range to avoid overlap with Telegram IDs.
+      - Checkout now uses ensured mapped `user_id` when calling direct-order creation.
+  - Latest storefront auth/checkout task batch has been implemented and validated:
+    - Fixed auth button CSS for login/register actions.
+    - Added signup confirm-password input + validation.
+    - Login-required views now render login form inline.
+    - Removed two header shortcut icons (`🛒`, `📦`) with JSX logic commented.
+    - Product card banner area switched to image-only.
+    - Product-card purchase flow moved to dedicated checkout page (`/checkout`) instead of modal.
   - Dashboard/Stocks/Users/chat/timeout/reports/stock-counters changes were implemented and validated previously.
   - Validation already passed:
     - `npm -C admin-dashboard run build`
@@ -182,13 +326,430 @@ Progress State:
     - `admin-dashboard/app/(admin)/settings/page.tsx`:
       - Wrapped `shop_page_size` in a labeled section (`Phân trang sản phẩm`) with explicit helper text.
       - Replaced ambiguous placeholder with clear example (`Ví dụ: 10`).
+  - Added per-user purchase stats on Users page:
+    - `admin-dashboard/app/(admin)/users/page.tsx`:
+      - Loads recent users list, then fetches `orders(user_id, price)` for those users.
+      - Aggregates per-user `order_count` and `total_paid` client-side.
+      - Renders 2 new table columns: `Đơn đã mua` and `Tổng đã mua (VND)`.
+      - Updated empty-state `colSpan` to match added columns.
+  - Extended Users search input to support both user id and username:
+    - `admin-dashboard/app/(admin)/users/page.tsx`:
+      - Filter now matches `user_id` or `username` (case-insensitive).
+      - Supports search values with/without leading `@` for usernames.
+      - Updated search placeholder text to `Tìm theo user_id hoặc username`.
+  - Implemented Products hidden-tab split view:
+    - `admin-dashboard/app/(admin)/products/page.tsx`:
+      - Added segmented tabs for product list: `Đang hiển thị`, `Đang ẩn`, `Đã xóa mềm`.
+      - Default list tab now shows only visible products so hidden items are no longer mixed with normal items.
+      - Added per-tab counters and tab-specific empty-state messages.
+  - Implemented Orders page parity with Dashboard order columns:
+    - `admin-dashboard/app/(admin)/orders/page.tsx`:
+      - Added `Username` + product-name resolution via side queries to `users`/`products`.
+      - Aligned columns to Dashboard latest-orders table:
+        - `ID`, `UserID`, `Username`, `Sản phẩm`, `SL`, `Giá`, `Thời gian`.
+      - Time formatting now uses `Asia/Ho_Chi_Minh` same as Dashboard.
+  - Implemented Reports best-practice expansion:
+    - `admin-dashboard/app/(admin)/reports/page.tsx`:
+      - Added operational KPIs: revenue deltas (today vs yesterday, 7d vs previous 7d), order counts, AOV 30d, avg quantity per order.
+      - Added direct-order quality metrics: confirmed/failure rates and pending over-10-minute count.
+      - Added `Xu hướng 7 ngày` table (orders + revenue/day).
+      - Added `Top sản phẩm 30 ngày` ranking table (orders/qty/revenue).
+  - Implemented latest Products request (`Vị trí` ordering + hide `Trạng thái` column):
+    - `admin-dashboard/app/(admin)/products/page.tsx`:
+      - Removed `Trạng thái` column from `Danh sách sản phẩm` table.
+      - Added `Vị trí` field to add/edit product forms and `Vị trí` column in table.
+      - Added dashboard-side sorting for visible/hidden/deleted tabs by `sort_position` (fallback `id`).
+      - Added migration-safe fallback message if `sort_position` column is missing.
+    - `database/db.py`:
+      - Added sqlite migration for `products.sort_position`.
+      - `get_products` now orders by `sort_position ASC` then `id ASC` (null position last).
+      - Included `sort_position` in product payloads and `add_product(...)`.
+    - `database/supabase_db.py`:
+      - Added product sorting helpers and optional `sort_position` parsing.
+      - `get_products` now normalizes position map from `products` table and returns sorted products for bot handlers.
+      - Included `sort_position` in product payload/add-product path for compatibility.
+    - New SQL file:
+      - `supabase_schema_product_position.sql`:
+        - Adds `products.sort_position`.
+        - Adds index `idx_products_sort_position`.
+        - Documents bot-ordering semantics in column comment.
   - Fixed inline product buttons being visually narrowed after language selection:
     - `handlers/start.py`:
       - In `set_language(...)`, changed inline products message text from `"👇"` to `select_text` so Telegram uses a wider bubble and avoids heavy truncation.
+  - Created standalone Next.js storefront project:
+    - New folder: `storefront-web/` with independent Next app config (`package.json`, `tsconfig.json`, `next.config.js`, `.env.example`).
+    - UI: `storefront-web/components/StorefrontPage.tsx` + `storefront-web/app/globals.css`
+      - Shopmmo-inspired layout (top strip, header/search, menu bar, hero, promo banners, category strip, product cards, side ads, responsive breakpoints).
+      - Product filtering by search/category, load-more behavior, and checkout modal.
+    - Data/payment backend layer:
+      - `storefront-web/lib/shop.ts`: Supabase service-role access, product+stock loading, support contacts parsing, direct-order creation via RPC/fallback, order status lookup.
+      - `storefront-web/lib/pricing.ts`: tier pricing + buy-X-get-Y computation aligned with bot logic.
+      - `storefront-web/lib/vietqr.ts`: VietQR URL generation with bank code mapping.
+      - `storefront-web/lib/supabaseAdmin.ts`: server-side Supabase admin client.
+    - API routes:
+      - `storefront-web/app/api/products/route.ts`
+      - `storefront-web/app/api/checkout/route.ts`
+      - `storefront-web/app/api/orders/status/route.ts`
+    - Home page wiring:
+      - `storefront-web/app/page.tsx` loads bootstrap data from Supabase and is forced dynamic (`revalidate=0`).
+      - Checkout flow requires Telegram ID, creates pending `direct_orders`, renders QR payment details, and polls status updates for SePay confirmation.
+    - Project usage doc:
+      - `storefront-web/README.md`.
+  - Upgraded storefront from mostly-UI to runtime-logic mode:
+    - `storefront-web/lib/shop.ts`:
+      - Added settings-driven behavior parsing from dashboard keys:
+        - `payment_mode`, `shop_page_size`, `show_shop`, `show_support`, `show_history`, `show_deposit`, `show_balance`, `show_withdraw`, `show_usdt`, `show_language`.
+      - Added product sold-quantity aggregation from `orders` and merged into product list (`sold_count`).
+      - Added direct-order expiry normalization (10 minutes) with automatic DB status update to `cancelled` when stale.
+      - Added user order summary API model combining `direct_orders` and delivered `orders` by Telegram user id.
+      - Improved support contacts parser to align with bot logic for Telegram/Facebook/Zalo/custom links.
+      - Added stricter checkout guards:
+        - Block checkout when `show_shop=false`.
+        - Respect dashboard `payment_mode`; website keeps VietQR/SePay flow and rejects `balance`-only mode with explicit message.
+    - New API endpoint:
+      - `storefront-web/app/api/orders/user/route.ts` for lookup by Telegram ID.
+    - Updated API endpoints:
+      - `storefront-web/app/api/products/route.ts` now supports query filtering/pagination (`q`, `page`, `pageSize`, `inStockOnly`) + `no-store`.
+      - `storefront-web/app/api/checkout/route.ts` now validates payload fields and returns `no-store`.
+      - `storefront-web/app/api/orders/status/route.ts` now returns `no-store`.
+    - `storefront-web/components/StorefrontPage.tsx`:
+      - Added settings-driven UX states and controls:
+        - Sort/filter controls, out-of-stock toggle, page-size-based load more.
+        - Header/menu actions wired to support links and order lookup panel.
+      - Added order lookup logic:
+        - Tra cứu theo Telegram ID (direct orders + delivered orders tables).
+        - Tra cứu theo mã thanh toán.
+      - Added checkout runtime enhancements:
+        - Live countdown to expiry, status polling, improved validation/feedback.
+      - Added storefront metrics display (`totalProducts`, `inStockProducts`, `totalStock`, `soldQuantity`).
+    - `storefront-web/app/globals.css`:
+      - Added styling for operational controls and order-lookup sections (`stats-bar`, `section-actions`, `orders-panel`, tables/forms, menu active/disabled states).
+  - Added storefront banner configurability + typography rebalance:
+    - `admin-dashboard/app/(admin)/settings/page.tsx`:
+      - Added banner settings keys/inputs so admin can set image URLs:
+        - `storefront_hero_banner_url`
+        - `storefront_side_left_banner_url`
+        - `storefront_side_right_banner_url`
+        - `storefront_mini_banner_1_url` .. `storefront_mini_banner_4_url`
+    - `storefront-web/lib/shop.ts`:
+      - Extended `StorefrontSettings` and settings loader to include parsed banner URL fields with safe protocol checks (`http(s)` / `/`).
+    - `storefront-web/app/page.tsx`:
+      - Updated fallback settings to include all banner URL fields.
+    - `storefront-web/components/StorefrontPage.tsx`:
+      - Hero/side/mini banners now use settings-driven image URLs with gradient overlays and automatic fallback to existing gradient banners when empty.
+    - `storefront-web/app/globals.css`:
+      - Added image-overlay styles (`.with-image`, `.has-image`) and tuned typography scales for hero, cards, stats, and responsive breakpoints.
+  - Applied second-pass typography downscale after user UI feedback ("font still too big"):
+    - `storefront-web/app/globals.css`:
+      - Reduced font sizes further for section heading/subtext, category labels, product cover titles, product names/prices/stats/buttons, side-banner text, hero text, mini-banner text, and stats numbers.
+      - Tightened card height/button sizing for more compact visual density.
+  - Applied focused third-pass downscale for product price line after screenshot feedback:
+    - `storefront-web/app/globals.css`:
+      - Reduced `.product-meta .price` to smaller clamp on desktop and smaller mobile override.
+      - Added tighter `line-height` for multi-line price ranges to reduce visual bulk.
+  - Renamed banner terminology to match business naming:
+    - `admin-dashboard/app/(admin)/settings/page.tsx`:
+      - Reworked banner settings UI into explicit groups:
+        - `Banner Giữa` (banner bự ở giữa)
+        - `Banner Ứng dụng` (4 banner nhỏ bên dưới)
+        - `Banner Quảng cáo` (2 banner 2 bên màn hình)
+      - Added explicit note: `Banner Hàng hóa` is managed per Product, not in this settings block.
+    - `admin-dashboard/app/(admin)/products/page.tsx`:
+      - Updated page description to mention `Banner Hàng hóa` per product.
+    - `storefront-web/components/StorefrontPage.tsx`:
+      - Product-card cover badge text changed from `SẢN PHẨM` to `BANNER HÀNG HÓA`.
+    - `storefront-web/app/globals.css`:
+      - Tuned product badge style to fit longer label (`font-size`, `padding`, `white-space: nowrap`).
+  - Reworked storefront product-card UI to match latest screenshot direction:
+    - `storefront-web/components/StorefrontPage.tsx`:
+      - Card header now uses structured cover layout (`badge + title + promo chip + logo block`) instead of plain gradient text block.
+      - Added deterministic visual metadata generation:
+        - cover badge type (`SẢN PHẨM` / `NÂNG CẤP`)
+        - promo chip text (`GIẢM ĐẾN X%`)
+        - logo monogram fallback per product name
+        - rating/vote metadata row + delivery-status text.
+      - Changed CTA row to compact `Order` link style like reference card design.
+    - `storefront-web/app/globals.css`:
+      - Introduced card-shell and cover sub-layout classes (`product-cover-shell`, `cover-top`, `cover-main`, `cover-copy`, `cover-logo`, `promo-chip`).
+      - Replaced product-cover themes with reference-like palettes (`theme-night`, `theme-netflix`, `theme-light`, `theme-aqua`, `theme-deep`, `theme-royal`).
+      - Adjusted product-card borders/radius/shadow/spacing to match screenshot density.
+      - Updated mobile overrides for new chip/logo/card typography.
+  - Refined product-card UI again after user feedback that result was still far from reference:
+    - `storefront-web/components/StorefrontPage.tsx`:
+      - Added keyword-based visual presets per product family (Netflix/Adobe/Figma/ChatGPT/Freepik/LastPass/CamScanner/Grok + fallback).
+      - Added per-preset properties for badge type, promo-chip color/text, logo style, and cover class.
+      - Updated card markup to use preset classes and stable badge/chip/logo rendering.
+    - `storefront-web/app/globals.css`:
+      - Added dedicated preset cover classes (`preset-grok`, `preset-netflix`, `preset-adobe`, `preset-figma`, `preset-chatgpt`, `preset-freepik`, `preset-lastpass`, `preset-camscanner`).
+      - Added dedicated chip color variants (`chip-red`, `chip-orange`, `chip-purple`, `chip-teal`, `chip-silver`) and logo variants (`logo-*`).
+      - Refined meta row with bullet separators, tuned price/title sizing, and kept compact `Order` link behavior.
+  - Applied typography-focused refinement after user stated font/size still ugly:
+    - `storefront-web/app/globals.css`:
+      - Changed primary body font priority to `Be Vietnam Pro` for closer visual tone.
+      - Reduced and softened card typography scales:
+        - cover title, promo chip, product title, price, stats, order link.
+      - Reduced mobile card typography and logo block size overrides.
+      - Kept card logic/layout intact; only typography/visual tuning changed.
+  - Split Bot Settings and Website Settings into separate dashboard flows:
+    - `admin-dashboard/app/(admin)/settings/page.tsx` kept bot-only settings and links out to Website dashboard.
+    - Added dedicated website route in sidebar: `admin-dashboard/components/AppShell.tsx` (`/website`).
+    - Implemented/expanded `admin-dashboard/app/(admin)/website/page.tsx`:
+      - Website-only settings keys (`website_*`) including `Banner Giữa`, `Banner Ứng dụng`, `Banner Quảng cáo`.
+      - Product-level Website settings table for `Banner Hàng hóa` + website name/price/tier/promo/logo/enabled.
+  - Added website-specific product schema + RPC output coverage:
+    - `supabase_schema.sql`:
+      - Added product columns:
+        - `website_name`, `website_price`, `website_price_tiers`,
+        - `website_promo_buy_quantity`, `website_promo_bonus_quantity`,
+        - `website_banner_url`, `website_logo_url`, `website_enabled`.
+      - Added `ALTER TABLE ... ADD COLUMN IF NOT EXISTS ...` migration lines.
+      - Updated stock RPC return shape to include website columns and added `DROP FUNCTION IF EXISTS ...` guards for return-type changes.
+  - Wired storefront runtime to website-specific settings/product overrides:
+    - `storefront-web/lib/shop.ts`:
+      - `getStorefrontSettings()` now prefers `website_*` keys with fallback to legacy keys.
+      - Product mapping now applies website override values for name/price/tier/promo/banner/logo/enabled.
+      - Product lists now filter out `website_enabled = false`.
+      - Direct-order checkout uses website bank settings directly for VietQR display (insert logic still reuses current direct-order pipeline).
+    - `storefront-web/components/StorefrontPage.tsx` + `storefront-web/app/globals.css`:
+      - Product cards now support per-product cover image (`website_banner_url`) and logo image (`website_logo_url`) in the card UI.
+  - Split admin UI into 2 independent dashboard route/layout groups with separate sidebars:
+    - Bot Dashboard (existing routes):
+      - Keeps `/`, `/products`, `/stock`, `/orders`, `/direct-orders`, `/deposits`, `/withdrawals`, `/usdt`, `/users`, `/reports`, `/settings`.
+      - Sidebar remains in `admin-dashboard/components/AppShell.tsx` and now includes switch button to Website Dashboard.
+    - Website Dashboard (new isolated routes/layout):
+      - New layout/shell: `admin-dashboard/app/(website-dashboard)/website/layout.tsx` + `admin-dashboard/components/WebsiteShell.tsx`.
+      - New routes:
+        - `/website` (overview)
+        - `/website/settings` (website-only settings keys)
+        - `/website/products` (website product pricing/banner overrides).
+      - Removed old shared-route page `admin-dashboard/app/(admin)/website/page.tsx` to avoid route collision and enforce separation.
+  - Website Settings expanded to mirror bot settings structure with website namespace:
+    - Added website counterparts in dashboard UI:
+      - `website_sepay_token`, `website_binance_pay_id`,
+      - plus existing `website_bank_*`, payment/toggles/support/page-size and website banner groups.
+  - Bot Settings page now links to new isolated website settings route:
+    - `admin-dashboard/app/(admin)/settings/page.tsx` link changed to `/website/settings`.
+  - Finalized website banner UX + dashboard field visibility per latest request:
+    - `admin-dashboard/app/(website-dashboard)/website/products/page.tsx`:
+      - Hid Website Dashboard bot-only fields from UI table/edit surface:
+        - `Tên Bot`, `Giá Bot`, `Tier Bot`, `Logo Website (URL)`.
+      - Kept website-specific editable fields:
+        - `Tên Website`, `Giá Website`, `Tier Website`, `Promo Website`, `Banner Hàng hóa`, `Hiện trên Website`.
+    - `admin-dashboard/app/(website-dashboard)/website/settings/page.tsx`:
+      - `Banner Ứng dụng` now supports dynamic add/remove rows.
+      - Added side ad link settings:
+        - `website_banner_ads_left_link`
+        - `website_banner_ads_right_link`
+      - Saves dynamic app banners JSON in `website_banner_apps`, with backward-compatible mirror to legacy `website_banner_app_1_url..4`.
+    - `storefront-web/lib/shop.ts`:
+      - Added settings parsing for dynamic app banners and side ad links:
+        - `app_banners`
+        - `side_banner_left_link`
+        - `side_banner_right_link`
+      - Added legacy fallback parsing for old banner keys.
+    - `storefront-web/components/StorefrontPage.tsx`:
+      - `Banner Ứng dụng` renders 4 items by default.
+      - If >4 items, enables left/right navigation (carousel-style step).
+      - Side ad banners now support:
+        - clickable destination links (if configured)
+        - close `X` button per side to hide ad.
+    - `storefront-web/app/globals.css`:
+      - Added styles for app-banner carousel controls and side-ad close/link UX.
+    - `storefront-web/app/page.tsx`:
+      - Updated fallback settings to include `app_banners` + side-ad link fields.
+  - Implemented full Website Dashboard tab parity with Bot Dashboard (separate sidebar + routes):
+    - `admin-dashboard/components/WebsiteShell.tsx`:
+      - Navigation now includes:
+        - `Dashboard`, `Products`, `Stock`, `Orders`, `Direct Orders`, `Users`, `Reports`, `Settings`.
+    - Added new Website routes:
+      - `admin-dashboard/app/(website-dashboard)/website/stock/page.tsx`
+      - `admin-dashboard/app/(website-dashboard)/website/orders/page.tsx`
+      - `admin-dashboard/app/(website-dashboard)/website/direct-orders/page.tsx`
+      - `admin-dashboard/app/(website-dashboard)/website/users/page.tsx`
+      - `admin-dashboard/app/(website-dashboard)/website/reports/page.tsx`
+      - Reworked `admin-dashboard/app/(website-dashboard)/website/page.tsx` to show website report stats + website transactions.
+  - Products parity update for Website Dashboard:
+    - Rebased `admin-dashboard/app/(website-dashboard)/website/products/page.tsx` to bot-products parity UX.
+    - Kept key difference as requested: Website uses `website_description` (with fallback to legacy `description` when column missing).
+  - Website Direct Orders fulfillment API added:
+    - `admin-dashboard/app/api/website-direct-orders/fulfill/route.ts`
+      - Admin-auth protected.
+      - Approve pending website direct order -> reserve stock -> create `website_orders` -> mark `website_direct_orders` confirmed.
+  - Storefront auth + website user/domain persistence added:
+    - `storefront-web/lib/supabaseBrowser.ts` + `.env.example` updated with `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+    - `storefront-web/components/StorefrontPage.tsx`:
+      - Added email/password login-signup modal via Supabase Auth.
+      - Checkout now requires signed-in website account (auth token sent to API).
+      - Orders panel switched to "Đơn hàng của tôi" using signed-in account data.
+    - `storefront-web/app/api/checkout/route.ts`:
+      - Requires Bearer auth token and validates Supabase user session.
+    - `storefront-web/lib/shop.ts`:
+      - Added `WebsiteSessionUser` input for checkout.
+      - Added `ensureWebsiteUser(...)` upsert into `website_users`.
+      - Added `createWebsiteDirectOrderRecord(...)` insert/upsert into `website_direct_orders`.
+      - Added `getWebsiteUserOrdersSummary(...)` for account-based order history.
+      - Added `syncWebsiteDirectOrderStatus(...)` to mirror status by `code`.
+      - Added `website_description` mapping for storefront product description override.
+    - Added new endpoint:
+      - `storefront-web/app/api/orders/me/route.ts` (authenticated website user orders lookup).
+  - Bot dashboard separation hardening:
+    - Added sentinel filter (`user_id < 900000000`) in bot-side pages to avoid mixing website-origin orders in bot admin lists/reports:
+      - `admin-dashboard/app/(admin)/orders/page.tsx`
+      - `admin-dashboard/app/(admin)/direct-orders/page.tsx`
+      - `admin-dashboard/app/(admin)/reports/page.tsx`
+      - `admin-dashboard/app/(admin)/page.tsx`
+  - Added resilience in payment checker notification sending:
+    - `sepay_checker.py` wraps direct-order Telegram send block in `try/except` so non-telegram sentinel users do not break processing loop.
+  - Added new SQL migration file (as requested: new file, not old file):
+    - `supabase_schema_website_dashboard.sql`:
+      - `products.website_description`
+      - `website_users`
+      - `website_direct_orders`
+      - `website_orders`
+      - indexes, foreign keys, update triggers
+      - backfill + sync trigger from `auth.users` -> `website_users`
+  - Enabled automatic Website order fulfillment in SePay checker:
+    - `database/supabase_db.py`:
+      - Added website direct-order helpers:
+        - `get_pending_website_direct_orders`
+        - `create_website_order_bulk`
+        - `set_website_direct_order_status`
+    - `sepay_checker.py`:
+      - Loads pending `website_direct_orders` and maps by payment `code`.
+      - On auto-cancel of stale pending direct order:
+        - also cancels matching `website_direct_orders`.
+      - On successful SePay match:
+        - if code belongs to Website order:
+          - reserves stock
+          - creates `website_orders` automatically
+          - marks both `direct_orders` and `website_direct_orders` as `confirmed`
+          - links `fulfilled_order_id` on website direct order
+          - skips Telegram delivery message
+        - otherwise preserves existing bot fulfillment flow.
+      - On insufficient stock:
+        - marks matching `website_direct_orders` as `failed` (besides `direct_orders`).
+  - Regression triage for latest user report (Telegram Bot Orders):
+    - Identified root cause: bot dashboard pages used `.lt("user_id", 900000000)` and dropped real Telegram users with large IDs.
+    - Affected pages: Bot `Dashboard`, `Orders`, `Direct Orders`, `Reports`.
+  - Applied Telegram Bot Orders hotfix:
+    - Removed sentinel `user_id` filtering from:
+      - `admin-dashboard/app/(admin)/page.tsx`
+      - `admin-dashboard/app/(admin)/orders/page.tsx`
+      - `admin-dashboard/app/(admin)/direct-orders/page.tsx`
+      - `admin-dashboard/app/(admin)/reports/page.tsx`
+    - Reports revenue now reads full bot `orders` rows without threshold-based user exclusion.
+  - Fixed Dashboard switcher UI + label in sidebars:
+    - `admin-dashboard/components/AppShell.tsx`:
+      - Switch CTA text changed to `Website Dashboard`.
+      - Replaced inline style with dedicated switch classes.
+    - `admin-dashboard/components/WebsiteShell.tsx`:
+      - Switch CTA text normalized to `Bot Dashboard`.
+      - Replaced inline style with dedicated switch classes.
+    - `admin-dashboard/app/globals.css`:
+      - `.button` now uses inline-flex centering for stable anchor/button rendering.
+      - Added `.dashboard-switch-card` and `.dashboard-switch-link` classes to prevent wrapped/broken switch button UI.
+  - Updated Website Dashboard per latest request:
+    - `admin-dashboard/app/(website-dashboard)/website/products/page.tsx`:
+      - Website Product now uses website-only pricing fields:
+        - `website_price`
+        - `website_price_tiers`
+        - `website_promo_buy_quantity`
+        - `website_promo_bonus_quantity`
+      - Website add/edit forms now save these `website_*` fields separately from bot pricing fields.
+      - Table labels updated to clarify Website-only pricing columns.
+    - `admin-dashboard/app/(website-dashboard)/website/settings/page.tsx`:
+      - Removed section `Hiển thị menu Website` from UI.
+      - Removed website menu-toggle keys from Website settings load/save payload.
+  - Website storefront pricing separation hardening:
+    - `storefront-web/lib/shop.ts`:
+      - Product mapper now treats Website pricing fields as independent channel values.
+      - When website pricing/tier/promo fields exist, storefront no longer falls back to bot tier/promo values by default.
+  - Added Product soft-delete/hide support (without removing historical orders):
+    - New SQL file: `supabase_schema_product_soft_delete.sql`
+      - Adds `products.is_hidden`, `products.is_deleted`, `products.deleted_at`.
+      - Rebuilds `get_products_with_stock` and `get_product_with_stock` so hidden/soft-deleted products are excluded from customer-facing fetch.
+      - Adds helper `soft_delete_product(...)`.
+    - `admin-dashboard/app/(admin)/products/page.tsx`:
+      - Hard delete replaced by soft delete.
+      - Added hide/unhide + restore actions.
+      - Added status column (`Đang hiển thị` / `Đang ẩn` / `Đã xóa mềm`).
+    - `admin-dashboard/app/(website-dashboard)/website/products/page.tsx`:
+      - Hard delete replaced by soft delete.
+      - Added hide/unhide + restore actions.
+      - Added status column.
+    - `database/db.py` + `database/supabase_db.py`:
+      - `delete_product(...)` now performs soft delete.
+      - product fetch defaults exclude hidden/deleted products.
+    - `storefront-web/lib/shop.ts`:
+      - Filters hidden/deleted products out of website storefront list.
+  - Polished Products action buttons UI (Bot + Website dashboards):
+    - `admin-dashboard/app/(admin)/products/page.tsx`:
+      - Replaced inline-margin stacked action buttons with structured action group layout.
+      - Action buttons now use compact pill styles for clearer spacing/priority.
+    - `admin-dashboard/app/(website-dashboard)/website/products/page.tsx`:
+      - Applied same action group/pill button layout for UI parity.
+    - `admin-dashboard/app/globals.css`:
+      - Added `warning` button variant and product action group classes (`product-row-actions`, `action-pill`, `product-actions-cell`).
+  - Website storefront search UX + header cleanup:
+    - `storefront-web/components/StorefrontPage.tsx`:
+      - Removed top gradient header strip (`Chính sách / FAQ / Liên hệ / language / mode`).
+      - Added search suggestion dropdown under header search input.
+      - Added `Xem tất cả kết quả →` behavior to navigate to `/products?q=...`.
+      - Added dedicated search-mode rendering (search hero + filter bar + product result count).
+      - Search page supports filters: danh mục, thể loại, giá từ/đến, sắp xếp, reset.
+      - Search page hides side ads and homepage hero/banner blocks for focused results.
+    - `storefront-web/app/products/page.tsx`:
+      - Added new search results route page (`/products`) using storefront bootstrap data + `q` query.
+    - `storefront-web/app/globals.css`:
+      - Added styles for search dropdown suggestion panel and result-page layout.
+      - Added `.canvas.search-mode` and responsive rules for search filters.
+  - Website banner-system refinement (implementation in progress, code patched):
+    - `storefront-web/lib/shop.ts`:
+      - Added support for multi-item middle banner setting key `website_banner_middles` with fallback to legacy single-banner key.
+    - `admin-dashboard/app/(website-dashboard)/website/settings/page.tsx`:
+      - Replaced single middle-banner input with add/remove list editor and persisted JSON setting (`website_banner_middles`).
+    - `storefront-web/components/StorefrontPage.tsx`:
+      - Removed website menu row (`Sản phẩm / Đơn hàng / Blogs / Telegram`).
+      - Converted middle/app/side banner rendering to image-only presentation.
+      - Added hero middle-banner carousel behavior (arrow nav + drag swipe + auto-swipe when banner count > 1).
+      - Upgraded app-banner strip behavior (looping nav + drag swipe + auto-swipe when banner count > 4).
+      - Added animated close state for side ad banners.
+    - `storefront-web/app/globals.css`:
+      - Added class-based canvas layouts for left/right ad visibility combinations to prevent layout break on ad close.
+      - Added side-ad close transition styles and updated hero/app banner carousel styles.
+  - Additional storefront cleanup per latest request:
+    - `storefront-web/components/StorefrontPage.tsx`:
+      - Removed homepage direct-order notice row, stats row, and category strip row.
+      - Made category/sub-category/price filters apply only in search mode so hidden homepage filters do not affect results.
+      - Added `show_app_banners` gate for app banners based on website setting.
+      - Side-ad columns are always rendered in home mode so closing ads does not trigger content resize/reflow.
+    - `storefront-web/lib/shop.ts`:
+      - Added `show_app_banners` to storefront settings contract and loaded value from `website_show_app_banners`.
+      - Removed storefront stats block from bootstrap payload to fully remove hidden stats logic.
+    - `admin-dashboard/app/(website-dashboard)/website/settings/page.tsx`:
+      - Added `website_show_app_banners` setting key and checkbox toggle under `Banner Ứng dụng`.
+    - `storefront-web/app/page.tsx` + `storefront-web/app/products/page.tsx`:
+      - Added fallback value `show_app_banners: true`.
+    - `storefront-web/app/globals.css`:
+      - Switched homepage layout to fixed 3-column mode (`.canvas.home-mode`) and added hidden side-card state (`.side-card.is-hidden`).
+  - Storefront auth/checkout UX revision per latest request:
+    - `storefront-web/components/StorefrontPage.tsx`:
+      - Added signup validation with `Xác nhận mật khẩu` field.
+      - Orders panel unauthenticated state now renders login form directly (instead of only a login button).
+      - Removed two header shortcut icons (`🛒`, `📦`) and kept their logic commented in JSX.
+      - Product banner area in cards is now image-only (no overlay text/logo content inside banner block).
+      - Product card click now opens purchase flow via dedicated route (`/checkout?product=...`).
+      - Removed in-page purchase modal and moved checkout flow into checkout-page rendering mode.
+    - `storefront-web/app/checkout/page.tsx`:
+      - Added dedicated checkout page route.
+    - `storefront-web/app/globals.css`:
+      - Added auth button styles (`.auth-submit`, `.auth-switch`) and auth action layout.
+      - Added checkout page UI blocks and clickable-card styles.
 - Now:
-  - Wait for user verification that `shop_page_size` field label/help text is clear in Settings UI.
+  - Latest Bot Products refinements implemented and validated in code.
+  - Awaiting user QA for Products table and Bot list ordering behavior.
 - Next:
-  - If needed, tune wording/position of the page-size section based on screenshot feedback.
+  - Fine-tune `Vị trí` UX details (label/help/default behavior) based on user feedback.
 
 Validation:
 - `npm -C admin-dashboard run build` passed after pricing/promo changes.
@@ -209,13 +770,98 @@ Validation:
 - `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile helpers/ui.py handlers/start.py handlers/shop.py` passed after adding configurable product page size setting.
 - `npm -C admin-dashboard run build` passed after adding `shop_page_size` setting field.
 - `npm -C admin-dashboard run build` passed after adding explicit label/help text for `shop_page_size` section.
+- `npm -C admin-dashboard run build` failed in this environment after Users page change due blocked network to Google Fonts (`fonts.googleapis.com`), not TypeScript/app logic error.
+- `./node_modules/.bin/tsc --noEmit -p tsconfig.json` (run in `admin-dashboard/`) passed after Users page purchase-stats change.
+- `./node_modules/.bin/tsc --noEmit -p tsconfig.json` (run in `admin-dashboard/`) passed after Users search-by-username update.
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json` initially failed before build because `.next/types` files were not generated yet.
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json` passed (using local shared deps for validation).
+- `npm -C storefront-web run build` passed (Next.js production build succeeded for `/` and API routes).
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json` passed again after storefront logic upgrade (settings/order-lookup/expiry changes).
+- `npm -C storefront-web run build` passed again after storefront logic upgrade (`/api/orders/user` included).
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json` passed after banner settings + typography updates.
+- `npm -C storefront-web run build` passed after banner settings + typography updates.
+- `./admin-dashboard/node_modules/.bin/tsc --noEmit -p admin-dashboard/tsconfig.json` passed after adding storefront banner settings fields.
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json && npm -C storefront-web run build` passed after second-pass typography downscale.
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json && npm -C storefront-web run build` passed after focused price-font downscale.
+- `./admin-dashboard/node_modules/.bin/tsc --noEmit -p admin-dashboard/tsconfig.json && ./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json && npm -C storefront-web run build` passed after banner naming refactor (`Banner Giữa / Ứng dụng / Quảng cáo / Hàng hóa`).
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json && npm -C storefront-web run build` passed after product-card UI redesign (shopmmo-like card layout).
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json && npm -C storefront-web run build` passed after preset-based product-card redesign refinement.
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json && npm -C storefront-web run build` passed after typography-focused card refinement.
+- `./admin-dashboard/node_modules/.bin/tsc --noEmit -p admin-dashboard/tsconfig.json` passed after Website dashboard separation + website product settings updates.
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json` passed after wiring website settings/product overrides.
+- `npm -C storefront-web run build` passed after wiring website settings/product overrides.
+- `npm -C admin-dashboard run build` failed in this environment due blocked access to Google Fonts (`fonts.googleapis.com`), not TypeScript logic errors.
+- `./admin-dashboard/node_modules/.bin/tsc --noEmit -p admin-dashboard/tsconfig.json` passed after splitting into separate Bot/Website dashboards with dedicated sidebars/layouts.
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json` passed after dashboard split.
+- `npm -C storefront-web run build` passed after dashboard split.
+- `npm -C admin-dashboard run build` still fails in this environment only because network cannot reach `fonts.googleapis.com` for `next/font`.
+- `./admin-dashboard/node_modules/.bin/tsc --noEmit -p admin-dashboard/tsconfig.json` passed after Website Dashboard field-visibility updates.
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json` passed after dynamic app-banner + side-link + close-ad logic.
+- `npm -C storefront-web run build` passed after dynamic app-banner carousel and side-ad link/close behavior.
+- `./admin-dashboard/node_modules/.bin/tsc --noEmit -p admin-dashboard/tsconfig.json` passed after Website Dashboard parity routes/pages and bot-side sentinel filters.
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json` passed after website auth + website order APIs integration.
+- `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile sepay_checker.py` passed after notification safety wrapper.
+- `npm -C storefront-web run build` passed after website auth/orders-me checkout flow updates.
+- `./admin-dashboard/node_modules/.bin/tsc --noEmit -p admin-dashboard/tsconfig.json` passed again after final website-tab parity and bot-side separation filters.
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json` passed again after final auth/orders changes.
+- `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile sepay_checker.py` passed again after final safe-send patch.
+- `npm -C storefront-web run build` passed again after final auth/orders changes.
+- `npm -C admin-dashboard run build` still fails in this environment due blocked Google Fonts network (`fonts.googleapis.com`), not TypeScript logic errors.
+- `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile sepay_checker.py database/supabase_db.py` passed after SePay website auto-fulfill logic.
+- `./admin-dashboard/node_modules/.bin/tsc --noEmit -p admin-dashboard/tsconfig.json` passed after checker/db helper updates.
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json` passed after checker/db helper updates.
+- `npm -C storefront-web run build` passed after checker/db helper updates.
+- `./admin-dashboard/node_modules/.bin/tsc --noEmit -p admin-dashboard/tsconfig.json` passed after removing bot-side `user_id` sentinel filters (Telegram Orders hotfix).
+- `./admin-dashboard/node_modules/.bin/tsc --noEmit -p admin-dashboard/tsconfig.json` passed after sidebar dashboard-switch UI + CTA label fix.
+- `./admin-dashboard/node_modules/.bin/tsc --noEmit -p admin-dashboard/tsconfig.json` passed after Website Products field separation + Website Settings menu-toggle removal.
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json` passed after storefront website pricing separation hardening.
+- `./admin-dashboard/node_modules/.bin/tsc --noEmit -p admin-dashboard/tsconfig.json` passed after Product soft-delete/hide dashboard changes.
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json` passed after hidden/deleted product filtering update.
+- `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile database/db.py database/supabase_db.py` passed after soft-delete DB-layer updates.
+- `./admin-dashboard/node_modules/.bin/tsc --noEmit -p admin-dashboard/tsconfig.json` passed after Products action-button UI polish.
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json` passed after storefront search dropdown + `/products` results page changes.
+- `npm -C storefront-web run build` passed after storefront search dropdown + `/products` results page changes.
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json` passed after banner-system refinement (menu-row removal, image-only banners, middle/app carousel upgrade, side-ad close animation).
+- `./admin-dashboard/node_modules/.bin/tsc --noEmit -p admin-dashboard/tsconfig.json` passed after Website Settings middle-banner list editor update.
+- `npm -C storefront-web run build` passed after banner-system refinement.
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json` passed after removing homepage notice/stats/category blocks and adding app-banner visibility setting.
+- `./admin-dashboard/node_modules/.bin/tsc --noEmit -p admin-dashboard/tsconfig.json` passed after adding `website_show_app_banners` setting toggle.
+- `npm -C storefront-web run build` passed after fixed no-resize side-ad close layout and homepage row removal.
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json` passed after removing storefront stats payload and `stats` prop wiring.
+- `./admin-dashboard/node_modules/.bin/tsc --noEmit -p admin-dashboard/tsconfig.json` passed again after final cleanup pass.
+- `npm -C storefront-web run build` passed again after final cleanup pass.
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json` passed after auth/signup form update + card click checkout routing + checkout-page mode.
+- `./admin-dashboard/node_modules/.bin/tsc --noEmit -p admin-dashboard/tsconfig.json` passed after Website dashboard/settings compatibility check for new storefront changes.
+- `npm -C storefront-web run build` passed after adding `/checkout` route and removing checkout modal flow.
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json` passed again during final QA pass.
+- `./admin-dashboard/node_modules/.bin/tsc --noEmit -p admin-dashboard/tsconfig.json` passed again during final QA pass.
+- `npm -C storefront-web run build` passed again during final QA pass.
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json` passed after FK hotfix.
+- `./admin-dashboard/node_modules/.bin/tsc --noEmit -p admin-dashboard/tsconfig.json` passed after FK hotfix compatibility check.
+- `npm -C storefront-web run build` passed after FK hotfix.
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json` passed after footer removal + filter UI redesign.
+- `./admin-dashboard/node_modules/.bin/tsc --noEmit -p admin-dashboard/tsconfig.json` passed after storefront UI redesign compatibility check.
+- `npm -C storefront-web run build` passed after footer removal + filter UI redesign.
+- `./storefront-web/node_modules/.bin/tsc --noEmit -p storefront-web/tsconfig.json` passed after toggling `showOutOfStock` default to ON.
+- `./admin-dashboard/node_modules/.bin/tsc --noEmit -p admin-dashboard/tsconfig.json` passed after toggle-default tweak compatibility check.
+- `npm -C storefront-web run build` passed after toggle-default tweak.
+- `./node_modules/.bin/tsc --noEmit -p tsconfig.json` (run in `admin-dashboard/`) passed after Products hidden-tab + Orders parity + Reports best-practice update.
+- `PYTHONPYCACHEPREFIX=/tmp/codex-pycache python3 -m py_compile database/db.py database/supabase_db.py` passed after adding product position ordering support.
+- `./node_modules/.bin/tsc --noEmit -p tsconfig.json` (run in `admin-dashboard/`) passed after Products `Vị trí` + hidden `Trạng thái` column update.
 
 Open Questions:
 - Should both features apply to all order flows (bot direct purchase, admin-created orders, any API order endpoint) or only end-user bot checkout? **UNCONFIRMED**
 - Can each product have multiple buy-x-get-y rules at once, or only one active rule? (currently assuming one active rule/product). **UNCONFIRMED**
 - If quantity does not match any explicit tier above base, should fallback use product base price? (currently assuming yes). **UNCONFIRMED**
 - For multi-contact support, should each channel allow a custom button label/icon in dashboard, or fixed channel templates are enough? **UNCONFIRMED**
+- Should website checkout also support authenticated website accounts later, or keep Telegram-ID driven flow as primary? **UNCONFIRMED**
+- For website users auth, should login be email/password via Supabase Auth, or custom account table auth managed by app? **UNCONFIRMED**
+- Whether to remove manual approve buttons from Website Direct Orders page now that auto-fulfill is enabled remains **UNCONFIRMED**.
+- For long-term clean split in shared `direct_orders`, should we add explicit `source` column (`bot`/`website`) via new SQL migration and use it in both dashboards? **UNCONFIRMED**
+- For the new Reports redesign, which KPIs/charts are highest priority for operations (e.g., conversion, AOV, failure rate, by-product ranking)? **UNCONFIRMED**
+- Preferred index base for `Vị trí` UI (start at 0 or 1) is not explicitly specified; current implementation assumption will use free integer input. **UNCONFIRMED**
 
 Notes:
 - `npm -C admin-dashboard run lint` prompts for initial ESLint setup (interactive), so it was not run.
 - Important: functions with changed return table shape in Postgres require `DROP FUNCTION ...` then `CREATE FUNCTION`; `CREATE OR REPLACE` is not enough.
+- Latest explicit user constraint: new SQL must be added in new SQL files, not old SQL files.

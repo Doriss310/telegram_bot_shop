@@ -19,6 +19,14 @@ create table if not exists public.products (
   price_tiers jsonb,
   promo_buy_quantity integer default 0,
   promo_bonus_quantity integer default 0,
+  website_name text,
+  website_price bigint,
+  website_price_tiers jsonb,
+  website_promo_buy_quantity integer default 0,
+  website_promo_bonus_quantity integer default 0,
+  website_banner_url text,
+  website_logo_url text,
+  website_enabled boolean default true,
   description text,
   format_data text
 );
@@ -119,6 +127,14 @@ create index if not exists direct_orders_code_idx on public.direct_orders (code)
 alter table public.products add column if not exists price_tiers jsonb;
 alter table public.products add column if not exists promo_buy_quantity integer default 0;
 alter table public.products add column if not exists promo_bonus_quantity integer default 0;
+alter table public.products add column if not exists website_name text;
+alter table public.products add column if not exists website_price bigint;
+alter table public.products add column if not exists website_price_tiers jsonb;
+alter table public.products add column if not exists website_promo_buy_quantity integer default 0;
+alter table public.products add column if not exists website_promo_bonus_quantity integer default 0;
+alter table public.products add column if not exists website_banner_url text;
+alter table public.products add column if not exists website_logo_url text;
+alter table public.products add column if not exists website_enabled boolean default true;
 alter table public.direct_orders add column if not exists bonus_quantity integer default 0;
 
 create table if not exists public.processed_transactions (
@@ -210,6 +226,7 @@ begin
 end $$;
 
 -- Fast product queries with stock counts
+drop function if exists public.get_products_with_stock();
 create or replace function public.get_products_with_stock()
 returns table (
   id bigint,
@@ -219,6 +236,14 @@ returns table (
   price_tiers jsonb,
   promo_buy_quantity integer,
   promo_bonus_quantity integer,
+  website_name text,
+  website_price bigint,
+  website_price_tiers jsonb,
+  website_promo_buy_quantity integer,
+  website_promo_bonus_quantity integer,
+  website_banner_url text,
+  website_logo_url text,
+  website_enabled boolean,
   description text,
   format_data text,
   stock bigint
@@ -236,6 +261,14 @@ as $$
     p.price_tiers,
     p.promo_buy_quantity,
     p.promo_bonus_quantity,
+    p.website_name,
+    p.website_price,
+    p.website_price_tiers,
+    p.website_promo_buy_quantity,
+    p.website_promo_bonus_quantity,
+    p.website_banner_url,
+    p.website_logo_url,
+    p.website_enabled,
     p.description,
     p.format_data,
     coalesce(s.stock, 0) as stock
@@ -250,6 +283,7 @@ as $$
   order by p.id;
 $$;
 
+drop function if exists public.get_product_with_stock(bigint);
 create or replace function public.get_product_with_stock(p_id bigint)
 returns table (
   id bigint,
@@ -259,6 +293,14 @@ returns table (
   price_tiers jsonb,
   promo_buy_quantity integer,
   promo_bonus_quantity integer,
+  website_name text,
+  website_price bigint,
+  website_price_tiers jsonb,
+  website_promo_buy_quantity integer,
+  website_promo_bonus_quantity integer,
+  website_banner_url text,
+  website_logo_url text,
+  website_enabled boolean,
   description text,
   format_data text,
   stock bigint
@@ -276,6 +318,14 @@ as $$
     p.price_tiers,
     p.promo_buy_quantity,
     p.promo_bonus_quantity,
+    p.website_name,
+    p.website_price,
+    p.website_price_tiers,
+    p.website_promo_buy_quantity,
+    p.website_promo_bonus_quantity,
+    p.website_banner_url,
+    p.website_logo_url,
+    p.website_enabled,
     p.description,
     p.format_data,
     coalesce(s.stock, 0) as stock
